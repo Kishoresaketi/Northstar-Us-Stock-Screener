@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Northstar | US Stock Screener</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="search.css" />
+    <link rel="stylesheet" href="profile.css" />
+    <link rel="stylesheet" href="fixes.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#"><span class="brand-mark">N</span> northstar</a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a class="active" href="#screener">Screener</a><a href="#watchlists">Watchlists</a><a href="#discover">Discover</a>
+      </nav>
+      <div class="top-actions">
+        <button class="icon-button" id="openSearch" title="Search stocks" aria-label="Search stocks"><i data-lucide="search"></i></button>
+        <button class="icon-button" title="Notifications" aria-label="Notifications"><i data-lucide="bell"></i></button>
+        <button class="avatar" title="Account">NA</button>
+      </div>
+    </header>
+    <div class="stock-search" id="stockSearch" hidden>
+      <form id="stockSearchForm"><i data-lucide="search"></i><input id="stockSearchInput" autocomplete="off" placeholder="Search ticker or company (e.g. VST)" /><button class="icon-button" type="button" id="closeSearch" aria-label="Close search"><i data-lucide="x"></i></button></form>
+      <p id="searchMessage">Enter a US ticker to add it to this screen.</p>
+    </div>
+
+    <main id="screenerMain">
+      <section class="workspace-heading">
+        <div>
+          <p class="eyebrow">US equities / live market scan</p>
+          <h1>Stock Screener</h1>
+          <p class="subtitle">Find quality companies at the right price.</p>
+        </div>
+        <div class="heading-actions">
+          <button class="button button-quiet"><i data-lucide="bookmark"></i> Save screen</button>
+          <button class="button button-dark"><i data-lucide="plus"></i> Create alert</button>
+        </div>
+      </section>
+
+      <section class="market-strip" aria-label="Market overview">
+        <div class="market-item"><span>S&amp;P 500</span><strong>5,648.40</strong><em class="positive">+0.42%</em></div>
+        <div class="market-item"><span>NASDAQ</span><strong>17,783.21</strong><em class="positive">+0.58%</em></div>
+        <div class="market-item"><span>Dow Jones</span><strong>41,096.77</strong><em class="negative">-0.11%</em></div>
+        <div class="market-item"><span>VIX</span><strong>15.62</strong><em class="negative">-2.19%</em></div>
+        <div class="market-state"><span class="live-dot"></span> <span id="marketStatus">Live refresh</span> <b id="refreshTime">Connecting...</b></div>
+      </section>
+
+      <section class="screen-shell" id="screener">
+        <aside class="filters-panel">
+          <div class="panel-title"><span>Filters</span><button id="resetFilters">Reset all</button></div>
+          <div class="filter-search"><i data-lucide="search"></i><input id="filterSearch" placeholder="Search filters" /></div>
+          <div class="active-filter-list">
+            <button class="active-filter">Market cap: Large <i data-lucide="x"></i></button>
+            <button class="active-filter">ROE: &gt; 15% <i data-lucide="x"></i></button>
+          </div>
+          <div class="filter-group">
+            <button class="filter-toggle" aria-expanded="true">Fundamentals <i data-lucide="chevron-up"></i></button>
+            <div class="filter-content">
+              <label>Market cap <select id="marketCap"><option value="all">Any size</option><option value="large" selected>Large cap</option><option value="mid">Mid cap</option></select></label>
+              <label>Price / earnings <div class="range-fields"><input placeholder="Min" inputmode="decimal" /><span>to</span><input placeholder="Max" inputmode="decimal" /></div></label>
+              <label>Return on equity <select id="roe"><option value="all">Any</option><option value="15" selected>Over 15%</option><option value="25">Over 25%</option></select></label>
+              <label>Revenue growth <select><option>Any</option><option>Over 10%</option><option>Over 20%</option></select></label>
+            </div>
+          </div>
+          <div class="filter-group compact"><button class="filter-toggle">Technical indicators <i data-lucide="chevron-down"></i></button></div>
+          <div class="filter-group compact"><button class="filter-toggle">Dividends <i data-lucide="chevron-down"></i></button></div>
+          <div class="filter-group compact"><button class="filter-toggle">Ownership <i data-lucide="chevron-down"></i></button></div>
+          <div class="filter-bottom"><button class="button button-dark full"><i data-lucide="sliders-horizontal"></i> Apply filters</button></div>
+        </aside>
+
+        <section class="results-panel">
+            <div class="results-header">
+            <div><p class="results-label">SCREEN RESULTS</p><h2><span id="resultCount">247</span> companies</h2></div>
+            <div class="results-tools"><button class="icon-button outlined" title="Configure columns"><i data-lucide="columns-3"></i></button><button class="button button-quiet">Sort: <b>Market cap</b> <i data-lucide="chevron-down"></i></button></div>
+          </div>
+            <div class="quick-filters" id="quickFilters">
+            <button class="chip selected" data-filter="all">All stocks</button><button class="chip" data-filter="technology">Technology</button><button class="chip" data-filter="healthcare">Healthcare</button><button class="chip" data-filter="financials">Financials</button><button class="chip" data-filter="energy">Energy</button>
+            </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th></th><th>Company</th><th>Price</th><th>1D <i data-lucide="arrow-down"></i></th><th>Market cap</th><th>P/E</th><th>ROE</th><th>Revenue growth</th><th></th></tr></thead>
+              <tbody id="stockRows"></tbody>
+            </table>
+          </div>
+          <div class="table-footer"><span>Showing 1–7 of 247 results</span><div class="pager"><button disabled><i data-lucide="chevron-left"></i></button><button class="page-current">1</button><button>2</button><button>3</button><span>...</span><button>36</button><button><i data-lucide="chevron-right"></i></button></div></div>
+        </section>
+      </section>
+    </main>
+    <main id="profileView" hidden>
+      <section class="profile-head">
+        <button class="back-button" id="backToScreener"><i data-lucide="arrow-left"></i> Screener</button>
+        <div class="profile-identity"><span class="company-icon detail-icon" id="profileInitial">V</span><div><p class="eyebrow">US EQUITY</p><h1 id="profileName">Vistra Corp.</h1><p id="profileTicker">VST · NYSE · Utilities</p></div></div>
+        <div class="profile-quote"><strong id="profilePrice">$149.63</strong><span id="profileChange" class="negative">-1.38%</span><small id="profileUpdated">Last updated just now</small></div>
+      </section>
+      <nav class="company-nav" id="companyNav"><button class="active" data-section="overview">Overview</button><button data-section="comparison">Comparison</button><button data-section="quarterly">Quarterly results</button><button data-section="profit">Profit &amp; loss</button><button data-section="balance">Balance sheet</button><button data-section="cashflow">Cash flow</button><button data-section="ratios">Ratios</button><button data-section="insights">Insights</button><button data-section="ownership">Shareholding</button></nav>
+      <div class="profile-body">
+        <section class="profile-section active" id="overview">
+          <div class="chart-panel"><div class="section-top"><div><p class="eyebrow">PRICE PERFORMANCE</p><h2 id="chartTitle">VST share price</h2></div><div class="range-switch" id="rangeSwitch"><button data-range="1mo">1M</button><button data-range="6mo">6M</button><button class="selected" data-range="1y">1Y</button><button data-range="3y">3Y</button><button data-range="5y">5Y</button><button data-range="10y">10Y</button><button data-range="max">MAX</button></div></div><div class="price-chart"><svg id="priceChart" viewBox="0 0 1000 300" preserveAspectRatio="none"></svg><div class="chart-loading" id="chartLoading">Loading price history...</div></div></div>
+          <div class="overview-grid"><div class="research-card"><p class="eyebrow">RESEARCH SNAPSHOT</p><h2>Pros &amp; cons</h2><div class="thesis"><div><h3><i data-lucide="plus"></i> Strengths</h3><ul id="prosList"></ul></div><div><h3><i data-lucide="minus"></i> Watchouts</h3><ul id="consList"></ul></div></div></div><div class="research-card"><p class="eyebrow">KEY NUMBERS</p><h2>At a glance</h2><div class="key-metrics" id="keyMetrics"></div></div></div>
+        </section>
+        <section class="profile-section" id="comparison"><div class="section-heading"><p class="eyebrow">PEER ANALYSIS</p><h2>Pure comparison</h2><p>Compare valuation, profitability, growth, and scale against the closest listed peers.</p></div><div class="data-panel"><div class="compare-toolbar"><span>Peer set</span><button class="button button-quiet">US utilities <i data-lucide="chevron-down"></i></button></div><div class="data-table-wrap"><table id="comparisonTable"></table></div></div></section>
+        <section class="profile-section" id="quarterly"><div class="section-heading"><p class="eyebrow">LAST 12 QUARTERS</p><h2>Quarterly results</h2><p>Quarter-by-quarter operating performance.</p></div><div class="data-panel"><div class="data-table-wrap"><table id="quarterlyTable"></table></div></div></section>
+        <section class="profile-section" id="profit"><div class="section-heading"><p class="eyebrow">ANNUAL HISTORY</p><h2>Profit &amp; loss</h2><p>Last ten reported financial years, in USD millions.</p></div><div class="data-panel"><div class="data-table-wrap"><table id="profitTable"></table></div></div></section>
+        <section class="profile-section" id="balance"><div class="section-heading"><p class="eyebrow">ANNUAL HISTORY</p><h2>Balance sheet</h2><p>Last ten reported financial years, in USD millions.</p></div><div class="data-panel"><div class="data-table-wrap"><table id="balanceTable"></table></div></div></section>
+        <section class="profile-section" id="cashflow"><div class="section-heading"><p class="eyebrow">ANNUAL HISTORY</p><h2>Cash flow</h2><p>Last ten reported financial years, in USD millions.</p></div><div class="data-panel"><div class="data-table-wrap"><table id="cashflowTable"></table></div></div></section>
+        <section class="profile-section" id="ratios"><div class="section-heading"><p class="eyebrow">ANNUAL HISTORY</p><h2>Ratios</h2><p>Efficiency, leverage, and returns across the last ten years.</p></div><div class="data-panel"><div class="data-table-wrap"><table id="ratiosTable"></table></div></div></section>
+        <section class="profile-section" id="insights"><div class="section-heading"><p class="eyebrow">RESEARCH NOTES</p><h2>Insights</h2><p>Structured observations based on the company profile and financial trend.</p></div><div class="insights-grid" id="insightsGrid"></div></section>
+        <section class="profile-section" id="ownership"><div class="section-heading"><p class="eyebrow">HOLDINGS HISTORY</p><h2>Shareholding pattern</h2><p>Institutional and insider ownership across the last ten years.</p></div><div class="data-panel"><div class="data-table-wrap"><table id="ownershipTable"></table></div></div></section>
+      </div>
+    </main>
+
+    <aside class="detail-drawer" id="detailDrawer" aria-hidden="true">
+      <button class="drawer-close icon-button" id="closeDrawer" aria-label="Close details"><i data-lucide="x"></i></button>
+      <p class="eyebrow">Company snapshot</p><div class="detail-company"><span class="company-icon detail-icon" id="detailInitial">A</span><div><h2 id="detailName">Apple Inc.</h2><p id="detailTicker">AAPL · Technology</p></div></div>
+      <div class="detail-price"><strong id="detailPrice">$221.27</strong><span class="positive" id="detailChange">+1.14%</span></div>
+      <div class="mini-chart"><svg viewBox="0 0 420 110" preserveAspectRatio="none"><path d="M0,84 C20,75 30,94 48,78 S75,70 92,76 S120,40 138,53 S165,64 182,42 S212,36 226,47 S251,28 267,39 S292,58 307,47 S335,30 351,36 S380,13 420,20" fill="none" stroke="currentColor" stroke-width="3" /></svg><span>1 year</span></div>
+      <div class="metric-grid"><div><span>Market cap</span><strong id="detailCap">$3.39T</strong></div><div><span>P/E ratio</span><strong id="detailPE">34.2</strong></div><div><span>ROE</span><strong id="detailROE">147.9%</strong></div><div><span>Revenue growth</span><strong id="detailGrowth">2.6%</strong></div></div>
+      <button class="button button-dark full">Open company profile <i data-lucide="arrow-up-right"></i></button>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+    <script src="app.js"></script><script src="profile.js"></script>
+  </body>
+</html>
