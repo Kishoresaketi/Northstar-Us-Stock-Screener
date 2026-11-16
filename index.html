@@ -44,10 +44,10 @@
       </section>
 
       <section class="market-strip" aria-label="Market overview">
-        <div class="market-item"><span>S&amp;P 500</span><strong>5,648.40</strong><em class="positive">+0.42%</em></div>
-        <div class="market-item"><span>NASDAQ</span><strong>17,783.21</strong><em class="positive">+0.58%</em></div>
-        <div class="market-item"><span>Dow Jones</span><strong>41,096.77</strong><em class="negative">-0.11%</em></div>
-        <div class="market-item"><span>VIX</span><strong>15.62</strong><em class="negative">-2.19%</em></div>
+        <div class="market-item" id="mkt-sp"><span>S&amp;P 500</span><strong>5,648.40</strong><em class="positive">+0.42%</em></div>
+        <div class="market-item" id="mkt-nq"><span>NASDAQ</span><strong>17,783.21</strong><em class="positive">+0.58%</em></div>
+        <div class="market-item" id="mkt-dj"><span>Dow Jones</span><strong>41,096.77</strong><em class="negative">-0.11%</em></div>
+        <div class="market-item" id="mkt-vix"><span>VIX</span><strong>15.62</strong><em class="negative">-2.19%</em></div>
         <div class="market-state"><span class="live-dot"></span> <span id="marketStatus">Live refresh</span> <b id="refreshTime">Connecting...</b></div>
       </section>
 
@@ -88,7 +88,7 @@
               <tbody id="stockRows"></tbody>
             </table>
           </div>
-          <div class="table-footer"><span>Showing 1–7 of 247 results</span><div class="pager"><button disabled><i data-lucide="chevron-left"></i></button><button class="page-current">1</button><button>2</button><button>3</button><span>...</span><button>36</button><button><i data-lucide="chevron-right"></i></button></div></div>
+          <div class="table-footer"><span id="resultRange">Showing 1–7 of 7 results</span><div class="pager"><button disabled><i data-lucide="chevron-left"></i></button><button class="page-current">1</button><button>2</button><button>3</button><span>...</span><button>36</button><button><i data-lucide="chevron-right"></i></button></div></div>
         </section>
       </section>
     </main>

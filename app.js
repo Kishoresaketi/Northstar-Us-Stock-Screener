@@ -13,7 +13,11 @@ let favorites = new Set();
 function renderRows() {
   const visible = stocks.filter(s => activeSector === 'all' || s.sector === activeSector);
   tbody.innerHTML = visible.map((s, index) => `<tr><td><button class="star ${favorites.has(s.ticker) ? 'active' : ''}" data-star="${s.ticker}" aria-label="Save ${s.ticker}"><i data-lucide="star"></i></button></td><td><button class="company-cell row-button" data-stock="${s.ticker}"><span class="company-icon">${s.icon}</span><span><span class="company-name">${s.name}</span><span class="company-ticker">${s.ticker}</span></span></button></td><td>${s.price}</td><td class="${s.change.startsWith('-') ? 'negative' : 'positive'}">${s.change}</td><td>${s.cap}</td><td>${s.pe}</td><td>${s.roe}</td><td class="${s.growth.startsWith('-') ? 'negative' : 'growth'}">${s.growth}</td><td><button class="row-button" data-stock="${s.ticker}" aria-label="View ${s.name}"><i data-lucide="chevron-right"></i></button></td></tr>`).join('');
-  document.querySelector('#resultCount').textContent = activeSector === 'all' ? '247' : String(Math.max(15, visible.length * 18));
+  document.querySelector('#resultCount').textContent = String(visible.length);
+  const range = document.querySelector('#resultRange');
+  if (range) range.textContent = visible.length ? `Showing 1–${visible.length} of ${visible.length} results` : 'No companies match these filters';
+  const pager = document.querySelector('.pager');
+  if (pager) pager.style.display = visible.length > 7 ? '' : 'none';
   lucide.createIcons();
 }
 async function refreshQuotes() {
@@ -73,6 +77,28 @@ document.querySelector('#stockSearchForm').addEventListener('submit', async even
     renderRows(); window.openProfile?.(ticker); stockSearch.hidden = true; searchInput.value = ''; searchMessage.textContent = 'Enter a US ticker to add it to this screen.';
   } catch (error) { searchMessage.textContent = `Could not find a current quote for ${ticker}. Try a listed US ticker.`; }
 });
+const stripMap = [['#mkt-sp', '^GSPC'], ['#mkt-nq', '^IXIC'], ['#mkt-dj', '^DJI'], ['#mkt-vix', '^VIX']];
+async function refreshStrip() {
+  try {
+    const response = await fetch(`/api/quotes?symbols=${encodeURIComponent(stripMap.map(([, symbol]) => symbol).join(','))}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error('Index feed unavailable');
+    const { quotes } = await response.json();
+    stripMap.forEach(([selector, symbol]) => {
+      const item = document.querySelector(selector);
+      const quote = quotes.find(q => q.symbol === symbol);
+      if (!item || !quote) return;
+      const value = item.querySelector('strong');
+      const change = item.querySelector('em');
+      if (value) value.textContent = Number(quote.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (change) {
+        change.textContent = `${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%`;
+        change.className = quote.changePercent >= 0 ? 'positive' : 'negative';
+      }
+    });
+  } catch (error) {
+    /* keep the seeded strip values when the feed is down */
+  }
+}
 renderRows(); lucide.createIcons();
-refreshQuotes();
-setInterval(refreshQuotes, 60000);
+refreshQuotes(); refreshStrip();
+setInterval(() => { refreshQuotes(); refreshStrip(); }, 60000);
