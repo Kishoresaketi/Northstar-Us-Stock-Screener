@@ -24,10 +24,7 @@ async function refreshQuotes() {
   const refreshTime = document.querySelector('#refreshTime');
   const marketStatus = document.querySelector('#marketStatus');
   try {
-    const symbols = stocks.map(stock => stock.ticker).join(',');
-    const response = await fetch(`/api/quotes?symbols=${symbols}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Quote service unavailable');
-    const { quotes, updatedAt } = await response.json();
+    const { quotes, updatedAt } = await NorthstarAPI.quotes(stocks.map(stock => stock.ticker));
     quotes.forEach(quote => {
       const stock = stocks.find(item => item.ticker === quote.symbol);
       if (!stock) return;
@@ -64,9 +61,7 @@ document.querySelector('#stockSearchForm').addEventListener('submit', async even
   if (!/^[A-Z.]{1,8}$/.test(ticker)) { searchMessage.textContent = 'Enter a valid US ticker, such as VST or MSFT.'; return; }
   searchMessage.textContent = `Looking up ${ticker}...`;
   try {
-    const response = await fetch(`/api/quotes?symbols=${ticker}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Not found');
-    const quote = (await response.json()).quotes[0];
+    const quote = (await NorthstarAPI.quotes([ticker])).quotes[0];
     const existing = stocks.find(stock => stock.ticker === ticker);
     const entry = existing || { ticker, name: ticker === 'VST' ? 'Vistra Corp.' : ticker, sector: 'all', cap: '—', pe: '—', roe: '—', growth: '—', icon: ticker.slice(0, 1) };
     entry.price = `$${Number(quote.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -80,9 +75,7 @@ document.querySelector('#stockSearchForm').addEventListener('submit', async even
 const stripMap = [['#mkt-sp', '^GSPC'], ['#mkt-nq', '^IXIC'], ['#mkt-dj', '^DJI'], ['#mkt-vix', '^VIX']];
 async function refreshStrip() {
   try {
-    const response = await fetch(`/api/quotes?symbols=${encodeURIComponent(stripMap.map(([, symbol]) => symbol).join(','))}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Index feed unavailable');
-    const { quotes } = await response.json();
+    const { quotes } = await NorthstarAPI.quotes(stripMap.map(([, symbol]) => symbol));
     stripMap.forEach(([selector, symbol]) => {
       const item = document.querySelector(selector);
       const quote = quotes.find(q => q.symbol === symbol);
@@ -102,9 +95,7 @@ async function refreshStrip() {
 function fmtCap(value) { if (value == null) return '—'; if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`; if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`; return `$${(value / 1e6).toFixed(0)}M`; }
 async function refreshFundamentals() {
   try {
-    const response = await fetch(`/api/fundamentals?symbols=${stocks.map(stock => stock.ticker).join(',')}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Fundamentals unavailable');
-    const { fundamentals } = await response.json();
+    const { fundamentals } = await NorthstarAPI.fundamentals(stocks.map(stock => stock.ticker));
     stocks.forEach(stock => {
       const f = fundamentals[stock.ticker];
       if (!f) return;

@@ -112,9 +112,7 @@ async function loadChart(range) {
   const loading = document.querySelector('#chartLoading'); const svg = document.querySelector('#priceChart');
   loading.hidden = false; loading.textContent = 'Loading price history...';
   try {
-    const response = await fetch(`/api/chart?symbol=${profileSymbol}&range=${range}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Chart unavailable');
-    const data = await response.json();
+    const data = await NorthstarAPI.chart(profileSymbol, range);
     const { points } = data;
     const cell = document.querySelector('#metric52w');
     if (cell && data.fiftyTwoWeekHigh != null && data.fiftyTwoWeekLow != null) {
@@ -138,17 +136,7 @@ window.openProfile = async function(symbol) {
   document.querySelectorAll('.range-switch button').forEach(button => button.classList.toggle('selected', button.dataset.range === '1y'));
   loadChart('1y');
   try {
-    const response = await fetch(`/api/financials?symbol=${symbol}`, { cache: 'no-store' });
-    if (!response.ok) {
-      if (response.status === 404) {
-        renderFinancialsUnavailable('No SEC filings found for this ticker. Financial statements are only available for US-listed companies that file with the SEC.');
-      } else {
-        renderFinancialsUnavailable('Financials temporarily unavailable. Try again shortly.');
-      }
-      window.scrollTo(0, 0);
-      return;
-    }
-    const data = await response.json();
+    const data = await NorthstarAPI.financials(symbol);
     profileName.textContent = data.name || profile.name;
     profilePrice.textContent = `$${Number(data.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const change = data.changePercent;
@@ -158,7 +146,11 @@ window.openProfile = async function(symbol) {
     renderFinancials(data);
     renderSnapshot(profile, data);
   } catch (error) {
-    renderFinancialsUnavailable('Financials temporarily unavailable. Try again shortly.');
+    if (error.status === 404) {
+      renderFinancialsUnavailable('No SEC filings found for this ticker. Financial statements are only available for US-listed companies that file with the SEC.');
+    } else {
+      renderFinancialsUnavailable('Financials temporarily unavailable. Try again shortly.');
+    }
   }
   window.scrollTo(0, 0);
 };

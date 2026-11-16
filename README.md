@@ -60,7 +60,29 @@ The site is static plus four Python serverless functions in `api/`:
    and `.` as the output directory. No `vercel.json` is needed; Vercel serves
    the static files and the `api/` functions automatically.
 3. The front end calls the same-origin `/api/*` paths, so nothing else needs
-   configuring.
+   configuring. This is the fully live deployment: prices refresh every
+   minute and financials are computed on demand.
+
+## Deploy (GitHub Pages)
+
+GitHub Pages cannot run the Python backend, so the Pages site reads pre-built
+data files instead. `scripts/build_static_data.py` fetches the same live data
+the `/api/*` endpoints use (quotes, charts, fundamentals, financials for the
+screener's tickers plus VST and the four market indices) and writes it to
+`data/*.json`. A GitHub Action (`.github/workflows/refresh-data.yml`) runs
+the script every hour and commits the refreshed files to `main`.
+
+1. In the repository, go to Settings → Pages → Build and deployment → Source:
+   **Deploy from a branch**, Branch: **main**, Folder: **/(root)**.
+2. The site is live at
+   `https://kishoresaketi.github.io/Northstar-Us-Stock-Screener/`.
+3. The front end (`api-client.js`) detects the `*.github.io` hostname and
+   reads `data/*.json` instead of `/api/*`; nothing else changes.
+
+Trade-off versus Vercel: on Pages the data is as fresh as the last hourly
+refresh, not minute-live, and ticker search only works for the tickers the
+build script covers (AAPL, MSFT, NVDA, GOOGL, LLY, JPM, XOM, VST). The
+financial statements change rarely, so hourly is plenty for those.
 
 ## Endpoints (local and deployed)
 
