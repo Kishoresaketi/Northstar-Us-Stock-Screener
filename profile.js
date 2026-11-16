@@ -3,54 +3,129 @@ const companyProfiles = {
   AAPL: { name: 'Apple Inc.', sector: 'Technology', pros: ['Premium ecosystem supports customer retention and services growth.', 'Exceptional cash generation funds buybacks and investment.', 'Global brand and distribution create a durable competitive position.'], cons: ['Hardware upgrade cycles can pressure revenue growth.', 'Regulatory scrutiny of app distribution remains elevated.', 'Revenue exposure to consumer spending and foreign exchange.'], peers: ['Microsoft', 'Alphabet', 'Samsung Electronics'] },
   MSFT: { name: 'Microsoft Corp.', sector: 'Technology', pros: ['Recurring cloud and enterprise software revenue.', 'AI distribution through an established enterprise base.', 'High-margin business mix supports durable cash generation.'], cons: ['Cloud investment intensity may pressure near-term margins.', 'Competition in cloud infrastructure remains fierce.', 'Large enterprise exposure can slow in weaker IT budgets.'], peers: ['Alphabet', 'Oracle', 'Amazon'] }
 };
-const annualYears = ['2016','2017','2018','2019','2020','2021','2022','2023','2024','2025','2026 YTD Jun'];
 const profileMain = document.querySelector('#profileView');
 let profileSymbol = 'VST';
 
 function profileFor(symbol) {
-  const base = companyProfiles[symbol] || { name: symbol, sector: 'US Equity', pros: ['Latest market price is available through the local quote service.', 'Company research can be added to a dedicated watchlist.', 'Historical price performance is available across all selected ranges.'], cons: ['Fundamental statement coverage needs a licensed company-data source.', 'Reported figures should be verified against company filings.', 'Market prices may be delayed by the public data source.'], peers: ['Peer A', 'Peer B', 'Peer C'] };
+  const base = companyProfiles[symbol] || { name: symbol, sector: 'US Equity', pros: ['Latest market price is available through the local quote service.', 'Company research can be added to a dedicated watchlist.', 'Historical price performance is available across all selected ranges.'], cons: ['Financial statements come from SEC EDGAR filings; companies that do not file with the SEC show price data only.', 'Reported figures should be verified against company filings.', 'Market prices may be delayed by the public data source.'] };
   return { ...base, symbol };
 }
 function money(value) { return value === null ? '—' : `$${Number(value).toLocaleString('en-US')}`; }
 function table(id, headers, rows) { document.querySelector(`#${id}`).innerHTML = `<thead><tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map((cell, i) => `<td class="${i && String(cell).startsWith('-') ? 'negative-text' : ''}">${cell}</td>`).join('')}</tr>`).join('')}</tbody>`; }
-function annualRows(labels, seed, multiplier = 1) { return labels.map((label, i) => [label, ...annualYears.map((year, y) => { const direction = (y - 5) * multiplier; const wave = ((i + 2) * (y + 3)) % 7; const value = Math.round(seed * (1 + y * .08 + i * .11 + wave * .018 + direction * .01)); return i === 3 ? `${(value / 100).toFixed(1)}%` : money(year.includes('YTD') ? value * .48 : value); })]); }
-function renderTables(profile) {
-  table('comparisonTable', ['Company', 'Market cap', 'P/E', 'EV / EBITDA', 'ROE', 'Revenue growth', 'Debt / equity'], [[profile.name, '$48.6B', '24.3', '10.8', '17.6%', '9.4%', '1.72'], ...profile.peers.map((peer, i) => [peer, ['$325.1B','$24.2B','$96.4B'][i], ['19.8','17.3','18.6'][i], ['12.6','8.1','11.2'][i], ['28.4%','35.1%','10.7%'][i], ['16.1%','4.2%','6.9%'][i], ['0.88','2.91','1.54'][i]])]);
-  const quarters = ['Q3 2023','Q4 2023','Q1 2024','Q2 2024','Q3 2024','Q4 2024','Q1 2025','Q2 2025','Q3 2025','Q4 2025','Q1 2026','Q2 2026'];
-  table('quarterlyTable', ['Metric', ...quarters], [['Revenue', ...quarters.map((_,i) => money(2400 + i * 110 + (i % 3) * 135))], ['Operating income', ...quarters.map((_,i) => money(440 + i * 34 + (i % 4) * 52))], ['Net income', ...quarters.map((_,i) => money(255 + i * 25 + (i % 3) * 38))], ['EPS diluted', ...quarters.map((_,i) => `$${(0.42 + i * .05 + (i % 2) * .06).toFixed(2)}`)], ['Operating margin', ...quarters.map((_,i) => `${(17.4 + i * .28).toFixed(1)}%`)]]);
-  table('profitTable', ['Metric', ...annualYears], annualRows(['Revenue','Operating income','Net income','EPS diluted'], 2800));
-  table('balanceTable', ['Metric', ...annualYears], annualRows(['Cash & equivalents','Total assets','Total debt','Shareholders equity'], 1700));
-  table('cashflowTable', ['Metric', ...annualYears], annualRows(['Cash from operations','Capital expenditure','Free cash flow','Dividends paid'], 760));
-  table('ratiosTable', ['Ratio', ...annualYears], [['Return on equity', ...annualYears.map((_,i) => `${(9.4 + i * .84).toFixed(1)}%`)], ['Operating margin', ...annualYears.map((_,i) => `${(14.8 + i * .39).toFixed(1)}%`)], ['Debt / equity', ...annualYears.map((_,i) => (2.54 - i * .09).toFixed(2))], ['Current ratio', ...annualYears.map((_,i) => (1.03 + i * .02).toFixed(2))], ['Interest coverage', ...annualYears.map((_,i) => (2.1 + i * .31).toFixed(1))]]);
-  table('ownershipTable', ['Holder class', ...annualYears], [['Institutions', ...annualYears.map((_,i) => `${(62 + i * .7).toFixed(1)}%`)], ['Insiders', ...annualYears.map((_,i) => `${(3.8 - i * .08).toFixed(1)}%`)], ['Retail & other', ...annualYears.map((_,i) => `${(34.2 - i * .62).toFixed(1)}%`)]]);
+function emptyTable(id, headers, message) { document.querySelector(`#${id}`).innerHTML = `<thead><tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr></thead><tbody><tr><td colspan="${headers.length}">${message}</td></tr></tbody>`; }
+function fmtMillions(value) { return value == null ? '—' : `$${Math.round(value / 1e6).toLocaleString('en-US')}`; }
+function fmtCap(value) { if (value == null) return '—'; if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`; if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`; return `$${(value / 1e6).toFixed(0)}M`; }
+function fmtPct(ratio) { return ratio == null ? '—' : `${(ratio * 100).toFixed(1)}%`; }
+function fmtSignedPct(ratio) { return ratio == null ? '—' : `${ratio >= 0 ? '+' : ''}${(ratio * 100).toFixed(1)}%`; }
+function fmtNum(value, digits = 2) { return value == null ? '—' : Number(value).toFixed(digits); }
+function fmtDollars(value) { return value == null ? '—' : `$${Number(value).toFixed(2)}`; }
+function fmtDays(value) { return value == null ? '—' : Number(value).toFixed(1); }
+
+function renderFinancials(data) {
+  const m = data.metrics || {};
+  const annual = data.annual || [];
+  const quarterly = data.quarterly || [];
+  const ratios = data.ratios || [];
+  const peers = data.peers || [];
+
+  table('comparisonTable', ['Company', 'Market cap', 'P/E', 'ROE', 'Revenue growth', 'Debt / equity'],
+    [[data.name || data.symbol, fmtCap(m.cap), fmtNum(m.pe, 1), fmtPct(m.roe), fmtSignedPct(m.growth), fmtNum(m.debt_equity)],
+     ...peers.map(p => [p.name || p.symbol, fmtCap(p.cap), fmtNum(p.pe, 1), fmtPct(p.roe), fmtSignedPct(p.growth), fmtNum(p.debt_equity)])]);
+
+  if (quarterly.length) {
+    const labels = quarterly.map(q => q.label);
+    table('quarterlyTable', ['Metric', ...labels],
+      [['Revenue', ...quarterly.map(q => fmtMillions(q.revenue))],
+       ['Operating income', ...quarterly.map(q => fmtMillions(q.operating_income))],
+       ['Net income', ...quarterly.map(q => fmtMillions(q.net_income))],
+       ['EPS diluted', ...quarterly.map(q => fmtDollars(q.eps))],
+       ['Operating margin', ...quarterly.map(q => (q.operating_income != null && q.revenue) ? fmtPct(q.operating_income / q.revenue) : '—')]]);
+  } else {
+    emptyTable('quarterlyTable', ['Metric'], 'No quarterly filings reported for this company yet.');
+  }
+
+  const years = annual.map(r => `FY${r.fy}`);
+  if (annual.length) {
+    const profitRows = [
+      ['Revenue', ...annual.map(r => fmtMillions(r.revenue))],
+      ...(annual.some(r => r.cogs != null) ? [['Cost of revenue', ...annual.map(r => fmtMillions(r.cogs))]] : []),
+      ['Operating income', ...annual.map(r => fmtMillions(r.operating_income))],
+      ['Net income', ...annual.map(r => fmtMillions(r.net_income))],
+      ['EPS diluted', ...annual.map(r => fmtDollars(r.eps))],
+    ];
+    table('profitTable', ['Metric', ...years], profitRows);
+    table('balanceTable', ['Metric', ...years],
+      [['Cash & equivalents', ...annual.map(r => fmtMillions(r.cash))],
+       ['Total assets', ...annual.map(r => fmtMillions(r.assets))],
+       ['Total debt', ...annual.map(r => fmtMillions(r.debt))],
+       ['Shareholders equity', ...annual.map(r => fmtMillions(r.equity))]]);
+    table('cashflowTable', ['Metric', ...years],
+      [['Cash from operations', ...annual.map(r => fmtMillions(r.cfo))],
+       ['Capital expenditure', ...annual.map(r => fmtMillions(r.capex))],
+       ['Free cash flow', ...annual.map(r => fmtMillions(r.fcf))],
+       ['Dividends paid', ...annual.map(r => fmtMillions(r.dividends))]]);
+    table('ratiosTable', ['Ratio', ...years],
+      [['Return on equity', ...ratios.map(r => fmtPct(r.roe))],
+       ['Return on capital employed', ...ratios.map(r => fmtPct(r.roce))],
+       ['Operating margin', ...ratios.map(r => fmtPct(r.opm))],
+       ['Net margin', ...ratios.map(r => fmtPct(r.net_margin))],
+       ['Debt / equity', ...ratios.map(r => fmtNum(r.debt_equity))],
+       ['Current ratio', ...ratios.map(r => fmtNum(r.current_ratio))],
+       ['Asset turnover', ...ratios.map(r => fmtNum(r.asset_turnover))],
+       ['Debtor days', ...ratios.map(r => fmtDays(r.debtor_days))],
+       ['Inventory days', ...ratios.map(r => fmtDays(r.inventory_days))]]);
+  } else {
+    const note = 'No 10-K annuals filed yet for this company, so the ten-year history is not available.';
+    emptyTable('profitTable', ['Metric'], note);
+    emptyTable('balanceTable', ['Metric'], note);
+    emptyTable('cashflowTable', ['Metric'], note);
+    emptyTable('ratiosTable', ['Ratio'], note);
+  }
 }
-function renderSnapshot(profile) {
+
+function renderSnapshot(profile, data) {
   document.querySelector('#prosList').innerHTML = profile.pros.map(item => `<li>${item}</li>`).join('');
   document.querySelector('#consList').innerHTML = profile.cons.map(item => `<li>${item}</li>`).join('');
-  document.querySelector('#keyMetrics').innerHTML = [['Market cap','$48.6B'],['P/E ratio','24.3'],['ROE','17.6%'],['Debt / equity','1.72'],['Dividend yield','0.6%'],['52W range','$79.58 – $168.67']].map(([name,value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
-  document.querySelector('#insightsGrid').innerHTML = [['Trending up','Revenue and operating income show a multi-year upward trajectory.','trending-up'],['Capital returns','Free cash flow gives management room for dividends and share repurchases.','landmark'],['Key risk','Track commodity pricing, leverage, and changes in electricity demand.','shield-alert']].map(([title,text,icon]) => `<article class="insight-card"><i data-lucide="${icon}"></i><h3>${title}</h3><p>${text}</p></article>`).join('');
-  renderTables(profile); lucide.createIcons();
+  const m = data ? (data.metrics || {}) : {};
+  const annual = data ? (data.annual || []) : [];
+  const latest = annual.length ? annual[annual.length - 1] : null;
+  document.querySelector('#keyMetrics').innerHTML = [['Market cap', fmtCap(m.cap)], ['P/E ratio', fmtNum(m.pe, 1)], ['ROE', fmtPct(m.roe)], ['Debt / equity', fmtNum(m.debt_equity)], ['EPS (TTM)', fmtDollars(m.eps_ttm)], ['52W range', '<span id="metric52w">—</span>']].map(([name, value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
+  const growthCard = m.growth == null
+    ? ['Revenue trend', 'Trailing revenue growth is not available from the company filings.', 'trending-up']
+    : ['Revenue trend', m.growth >= 0 ? `Revenue grew ${fmtPct(m.growth)} over the last twelve months.` : `Revenue was down ${fmtPct(Math.abs(m.growth))} over the last twelve months.`, 'trending-up'];
+  const returnsCard = m.roe == null
+    ? ['Returns', 'Return on equity is not available from the company filings.', 'landmark']
+    : ['Returns', `Return on equity is ${fmtPct(m.roe)} on trailing earnings${m.roce != null ? `, with return on capital employed at ${fmtPct(m.roce)}` : ''}.`, 'landmark'];
+  const cashCard = latest && latest.fcf != null
+    ? ['Capital returns', `Free cash flow was ${fmtMillions(latest.fcf)} in FY${latest.fy}.`, 'shield-alert']
+    : ['Capital returns', 'Free cash flow is not reported in the company filings.', 'shield-alert'];
+  document.querySelector('#insightsGrid').innerHTML = [growthCard, returnsCard, cashCard].map(([title, text, icon]) => `<article class="insight-card"><i data-lucide="${icon}"></i><h3>${title}</h3><p>${text}</p></article>`).join('');
+  lucide.createIcons();
+}
+function renderFinancialsUnavailable(message) {
+  ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable'].forEach(id => {
+    const el = document.querySelector(`#${id}`);
+    if (el) el.innerHTML = `<tbody><tr><td>${message}</td></tr></tbody>`;
+  });
 }
 async function loadChart(range) {
   const loading = document.querySelector('#chartLoading'); const svg = document.querySelector('#priceChart');
-  loading.hidden = false;
+  loading.hidden = false; loading.textContent = 'Loading price history...';
   try {
     const response = await fetch(`/api/chart?symbol=${profileSymbol}&range=${range}`, { cache: 'no-store' });
     if (!response.ok) throw new Error('Chart unavailable');
-    const { points } = await response.json();
+    const data = await response.json();
+    const { points } = data;
+    const cell = document.querySelector('#metric52w');
+    if (cell && data.fiftyTwoWeekHigh != null && data.fiftyTwoWeekLow != null) {
+      cell.textContent = `$${Number(data.fiftyTwoWeekLow).toLocaleString('en-US', { maximumFractionDigits: 2 })} – $${Number(data.fiftyTwoWeekHigh).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+    }
     const values = points.map(point => point.close); const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(max - min, 1);
     const coords = values.map((value, index) => `${(index / Math.max(values.length - 1, 1) * 1000).toFixed(2)},${(282 - ((value - min) / span * 242)).toFixed(2)}`);
     svg.innerHTML = `<path class="area" d="M0,300 L${coords.join(' L')} L1000,300 Z"></path><path class="line" d="M${coords.join(' L')}"></path>`;
     loading.hidden = true;
   } catch (error) {
-    const stock = stocks.find(item => item.ticker === profileSymbol);
-    const latest = Number(String(stock?.price || '100').replace(/[^0-9.]/g, '')) || 100;
-    const synthetic = Array.from({ length: 64 }, (_, index) => latest * (0.88 + index * .002 + Math.sin(index * .37) * .05));
-    const min = Math.min(...synthetic); const max = Math.max(...synthetic); const span = Math.max(max - min, 1);
-    const coords = synthetic.map((value, index) => `${(index / (synthetic.length - 1) * 1000).toFixed(2)},${(282 - ((value - min) / span * 242)).toFixed(2)}`);
-    svg.innerHTML = `<path class="area" d="M0,300 L${coords.join(' L')} L1000,300 Z"></path><path class="line" d="M${coords.join(' L')}"></path>`;
-    loading.textContent = 'Indicative trend shown while price history reconnects.';
-    setTimeout(() => { loading.hidden = true; }, 1800);
+    loading.textContent = 'Price history unavailable right now.';
   }
 }
 window.openProfile = async function(symbol) {
@@ -58,7 +133,34 @@ window.openProfile = async function(symbol) {
   document.querySelector('#screenerMain').hidden = true; document.querySelector('#detailDrawer').classList.remove('open'); document.querySelector('#scrim').classList.remove('open'); profileMain.hidden = false;
   profileInitial.textContent = symbol[0]; profileName.textContent = profile.name; profileTicker.textContent = `${symbol} · ${profile.sector}`; chartTitle.textContent = `${symbol} share price`;
   if (stock) { profilePrice.textContent = stock.price; profileChange.textContent = stock.change; profileChange.className = stock.change.startsWith('-') ? 'negative' : 'positive'; }
-  renderSnapshot(profile); document.querySelectorAll('.range-switch button').forEach(button => button.classList.toggle('selected', button.dataset.range === '1y')); loadChart('1y'); window.scrollTo(0, 0);
+  renderFinancialsUnavailable('Loading filings…');
+  renderSnapshot(profile, null);
+  document.querySelectorAll('.range-switch button').forEach(button => button.classList.toggle('selected', button.dataset.range === '1y'));
+  loadChart('1y');
+  try {
+    const response = await fetch(`/api/financials?symbol=${symbol}`, { cache: 'no-store' });
+    if (!response.ok) {
+      if (response.status === 404) {
+        renderFinancialsUnavailable('No SEC filings found for this ticker. Financial statements are only available for US-listed companies that file with the SEC.');
+      } else {
+        renderFinancialsUnavailable('Financials temporarily unavailable. Try again shortly.');
+      }
+      window.scrollTo(0, 0);
+      return;
+    }
+    const data = await response.json();
+    profileName.textContent = data.name || profile.name;
+    profilePrice.textContent = `$${Number(data.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const change = data.changePercent;
+    profileChange.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+    profileChange.className = change < 0 ? 'negative' : 'positive';
+    document.querySelector('#profileUpdated').textContent = `Updated ${new Date(data.asOf * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${data.source}`;
+    renderFinancials(data);
+    renderSnapshot(profile, data);
+  } catch (error) {
+    renderFinancialsUnavailable('Financials temporarily unavailable. Try again shortly.');
+  }
+  window.scrollTo(0, 0);
 };
 document.querySelector('#backToScreener').addEventListener('click', () => { profileMain.hidden = true; document.querySelector('#screenerMain').hidden = false; });
 document.querySelector('#rangeSwitch').addEventListener('click', event => { const button = event.target.closest('[data-range]'); if (!button) return; document.querySelectorAll('.range-switch button').forEach(item => item.classList.toggle('selected', item === button)); loadChart(button.dataset.range); });

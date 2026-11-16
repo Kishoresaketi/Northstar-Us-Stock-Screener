@@ -9,9 +9,21 @@ profile view with price history.
 Prices, daily changes, and charts come from Yahoo Finance's public chart API
 (`query1.finance.yahoo.com/v8/finance/chart`) — no API key needed. The
 screener table refreshes live once a minute; market-index values in the header
-strip (S&P 500, NASDAQ, Dow Jones, VIX) refresh the same way. Market cap, P/E,
-ROE, and revenue growth are currently seeded values and are being wired to live
-SEC EDGAR company facts; see `api/fundamentals.py` when it lands.
+strip (S&P 500, NASDAQ, Dow Jones, VIX) refresh the same way.
+
+Fundamentals come from the US Securities and Exchange Commission's EDGAR
+database (`data.sec.gov/api/xbrl/companyfacts`) — free, no API key, straight
+from the company's own 10-K and 10-Q filings:
+
+- The screener table's market cap, P/E, ROE, and revenue growth are computed
+  live from filings plus the current price (trailing twelve months for P/E,
+  ROE, and growth). A dash means the filings do not support that figure.
+- The profile page shows peer comparison, quarterly results (last 12
+  quarters), profit & loss, balance sheet, cash flow, and ratios for the last
+  ten reported financial years, all from the filings.
+- The shareholding pattern section was removed: there is no free source for
+  historical institutional/insider ownership, and the previous table was
+  generated placeholder data.
 
 Prices may be delayed by the public data source. This is a research tool, not
 investment advice.
@@ -25,16 +37,23 @@ python3 server.py
 ```
 
 Then open <http://127.0.0.1:4175>. The local server serves the site and the
-`/api/quotes` and `/api/chart` endpoints used by the front end.
+`/api/quotes`, `/api/chart`, `/api/financials`, and `/api/fundamentals`
+endpoints used by the front end.
 
 ## Deploy (Vercel)
 
-The site is static plus two Python serverless functions in `api/`:
+The site is static plus four Python serverless functions in `api/`:
 
 - `api/quotes.py` — `GET /api/quotes?symbols=AAPL,MSFT` returns live price and
   daily change per symbol (15-second server cache).
 - `api/chart.py` — `GET /api/chart?symbol=AAPL&range=1y` returns daily closes
-  for the profile chart (`1mo`, `6mo`, `1y`, `3y`, `5y`, `10y`, `max`).
+  for the profile chart (`1mo`, `6mo`, `1y`, `3y`, `5y`, `10y`, `max`), plus
+  the 52-week high and low.
+- `api/financials.py` — `GET /api/financials?symbol=AAPL` returns the full
+  profile payload: live metrics, ten years of annuals, twelve quarters, ten
+  years of ratios, and the peer comparison, all from SEC EDGAR filings.
+- `api/fundamentals.py` — `GET /api/fundamentals?symbols=AAPL,MSFT` returns
+  live metrics (market cap, P/E, ROE, growth) for the screener table.
 
 1. Import `KishoreSaketi/Northstar-Us-Stock-Screener` from the Vercel dashboard.
 2. Use the repository root, the **Other** framework preset, no build command,
@@ -48,7 +67,9 @@ The site is static plus two Python serverless functions in `api/`:
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/quotes?symbols=AAPL,MSFT` | Live price + daily change % per symbol. Also accepts index symbols (`^GSPC`, `^IXIC`, `^DJI`, `^VIX`). |
-| `GET /api/chart?symbol=AAPL&range=1y` | Daily closing points for the profile chart. |
+| `GET /api/chart?symbol=AAPL&range=1y` | Daily closing points for the profile chart, plus 52-week high/low. |
+| `GET /api/financials?symbol=AAPL` | Live metrics, 10 years of annuals, 12 quarters, 10 years of ratios, and peers, from SEC EDGAR filings. Returns 404 when the ticker has no SEC filings. |
+| `GET /api/fundamentals?symbols=AAPL,MSFT` | Live metrics (market cap, P/E, ROE, growth) per symbol for the screener table. |
 
 ## Notes
 
@@ -56,6 +77,9 @@ The site is static plus two Python serverless functions in `api/`:
   to the last shown values and reports "Quote feed unavailable" when the feed
   is down.
 - `server.py` is only for local development. Vercel deployments use `api/`.
-- Company profile research notes and the quarterly/annual statement tables are
-  placeholders until the SEC EDGAR wiring lands; do not treat them as reported
-  figures.
+- EDGAR data is only as complete as the company's own filings. Exxon Mobil's
+  current SEC filer is a newer entity with no 10-K annual history yet, so its
+  profile shows quarterly data only and some metrics are blank; foreign
+  issuers such as Novo Nordisk file under a different reporting regime and
+  may show blank peer figures. Where a figure cannot be derived from the
+  filings, the UI shows a dash rather than an estimate.

@@ -99,6 +99,25 @@ async function refreshStrip() {
     /* keep the seeded strip values when the feed is down */
   }
 }
+function fmtCap(value) { if (value == null) return '—'; if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`; if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`; return `$${(value / 1e6).toFixed(0)}M`; }
+async function refreshFundamentals() {
+  try {
+    const response = await fetch(`/api/fundamentals?symbols=${stocks.map(stock => stock.ticker).join(',')}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error('Fundamentals unavailable');
+    const { fundamentals } = await response.json();
+    stocks.forEach(stock => {
+      const f = fundamentals[stock.ticker];
+      if (!f) return;
+      stock.cap = fmtCap(f.cap);
+      stock.pe = f.pe != null ? f.pe.toFixed(1) : '—';
+      stock.roe = f.roe != null ? `${(f.roe * 100).toFixed(1)}%` : '—';
+      stock.growth = f.growth != null ? `${f.growth >= 0 ? '+' : ''}${(f.growth * 100).toFixed(1)}%` : '—';
+    });
+    renderRows();
+  } catch (error) {
+    /* keep the seeded values when the fundamentals feed is down */
+  }
+}
 renderRows(); lucide.createIcons();
-refreshQuotes(); refreshStrip();
-setInterval(() => { refreshQuotes(); refreshStrip(); }, 60000);
+refreshQuotes(); refreshStrip(); refreshFundamentals();
+setInterval(() => { refreshQuotes(); refreshStrip(); refreshFundamentals(); }, 60000);

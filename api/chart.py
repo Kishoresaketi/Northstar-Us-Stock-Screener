@@ -16,7 +16,9 @@ def get_chart(symbol, period):
     result = payload["chart"]["result"][0]
     closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
     points = [{"time": stamp, "close": close} for stamp, close in zip(result.get("timestamp", []), closes) if close is not None]
-    return {"symbol": symbol, "points": points, "price": result["meta"].get("regularMarketPrice")}
+    meta = result.get("meta", {})
+    return {"symbol": symbol, "points": points, "price": meta.get("regularMarketPrice"),
+            "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh"), "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow")}
 
 
 class handler(BaseHTTPRequestHandler):

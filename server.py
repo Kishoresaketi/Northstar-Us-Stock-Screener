@@ -8,6 +8,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
+from api.financials import get_financials
+from api.fundamentals import get_fundamentals
+
 CACHE_SECONDS = 15
 quote_cache = {"timestamp": 0, "symbols": "", "quotes": []}
 
@@ -33,12 +36,58 @@ def get_chart(symbol, period):
     result = payload["chart"]["result"][0]
     closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
     points = [{"time": stamp, "close": close} for stamp, close in zip(result.get("timestamp", []), closes) if close is not None]
-    return {"symbol": symbol, "points": points, "price": result["meta"].get("regularMarketPrice")}
+    meta = result.get("meta", {})
+    return {"symbol": symbol, "points": points, "price": meta.get("regularMarketPrice"),
+            "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh"), "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow")}
 
 
 class Server(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/financials":
+            query = urllib.parse.parse_qs(parsed.query)
+            symbol = query.get("symbol", [""])[0].upper()
+            if not symbol:
+                self.send_error(400, "Provide a symbol")
+                return
+            try:
+                data = get_financials(symbol)
+                status = 200
+            except ValueError as exc:
+                self.send_error(404, str(exc))
+                return
+            except Exception:
+                self.send_error(503, "Financials service temporarily unavailable")
+                return
+            body = json.dumps(data).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "max-age=3600" if status == 200 else "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if parsed.path == "/api/fundamentals":
+            query = urllib.parse.parse_qs(parsed.query)
+            symbols = query.get("symbols", [""])[0]
+            if not symbols:
+                self.send_error(400, "Provide at least one symbol")
+                return
+            try:
+                data = get_fundamentals(symbols.split(","))
+            except Exception:
+                self.send_error(503, "Fundamentals service temporarily unavailable")
+                return
+            body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if parsed.path == "/api/chart":
             query = urllib.parse.parse_qs(parsed.query)
             symbol = query.get("symbol", [""])[0].upper()
