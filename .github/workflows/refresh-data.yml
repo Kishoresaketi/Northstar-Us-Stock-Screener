@@ -1,0 +1,47 @@
+name: Refresh market data
+
+# GitHub Pages cannot run the Python backend, so the live data for the Pages
+# site is pre-built into data/*.json by this workflow and committed to main.
+# The front end reads those files when served from *.github.io (see
+# api-client.js). Commits made by GITHUB_TOKEN do not re-trigger workflows,
+# so the hourly commit cannot loop.
+#
+# Cadence (the universe is the S&P 500 + Nasdaq-100, 517 tickers):
+# - Hourly: quotes only. Prices move every hour; a full rebuild of ~5,000
+#   files every hour would hammer the free Yahoo/EDGAR sources and churn
+#   the git history for nothing.
+# - Daily (02:07 UTC, after the US market close data settles): full rebuild
+#   — peer map, search index, fundamentals, financials, all chart ranges.
+#   Filings only change on new 10-K/10-Q releases and charts only gain a
+#   new daily close, so daily is the honest refresh rate for those files.
+#   In live mode (local server.py or Vercel) the chart and price refresh
+#   every 60 seconds while a profile is open; the static site refreshes
+#   with these rebuilds.
+# The script picks the mode by UTC hour (--mode auto): full at 02 UTC,
+# quotes-only every other hour.
+on:
+  schedule:
+    - cron: "7 * * * *" # hourly quotes
+    - cron: "7 2 * * *" # daily full rebuild
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build static data
+        run: python3 scripts/build_static_data.py --mode auto
+      - name: Commit data
+        run: |
+          git config user.name "Northstar data refresh"
+          git config user.email "actions@github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "Refresh market data"
+          git push
