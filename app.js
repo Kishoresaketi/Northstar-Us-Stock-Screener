@@ -51,26 +51,69 @@ document.querySelector('#resetFilters').addEventListener('click', () => { docume
 const stockSearch = document.querySelector('#stockSearch');
 const searchInput = document.querySelector('#stockSearchInput');
 const searchMessage = document.querySelector('#searchMessage');
+const searchResults = document.querySelector('#searchResults');
 document.querySelector('#openSearch').addEventListener('click', () => { stockSearch.hidden = false; searchInput.focus(); });
-document.querySelector('#closeSearch').addEventListener('click', () => { stockSearch.hidden = true; });
-document.querySelector('#stockSearchForm').addEventListener('submit', async event => {
-  event.preventDefault();
-  const query = searchInput.value.trim().toUpperCase();
-  const knownNames = { 'VISTRA': 'VST', 'VISTRA CORP': 'VST', 'APPLE': 'AAPL', 'APPLE INC': 'AAPL', 'MICROSOFT': 'MSFT', 'NVIDIA': 'NVDA', 'ALPHABET': 'GOOGL', 'GOOGLE': 'GOOGL', 'ELI LILLY': 'LLY', 'JPMORGAN': 'JPM', 'EXXON': 'XOM' };
-  const ticker = knownNames[query] || query;
-  if (!/^[A-Z.]{1,8}$/.test(ticker)) { searchMessage.textContent = 'Enter a valid US ticker, such as VST or MSFT.'; return; }
+document.querySelector('#closeSearch').addEventListener('click', () => { stockSearch.hidden = true; searchResults.hidden = true; });
+let searchTimer = null;
+let lastSuggestions = [];
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const query = searchInput.value.trim();
+  if (query.length < 2) { searchResults.hidden = true; searchResults.innerHTML = ''; lastSuggestions = []; return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const results = await NorthstarAPI.search(query);
+      lastSuggestions = results;
+      if (!results.length) {
+        searchResults.innerHTML = '';
+        searchResults.hidden = true;
+        searchMessage.textContent = NorthstarAPI.staticMode
+          ? 'No match in the S&P 500 / Nasdaq-100 set. Try a ticker instead.'
+          : 'No match. Try a ticker instead.';
+        return;
+      }
+      searchResults.innerHTML = results.map(result =>
+        `<button type="button" data-symbol="${result.symbol}"><b>${result.symbol}</b><span>${result.name}</span><em>${result.sector || ''}</em></button>`).join('');
+      searchResults.hidden = false;
+    } catch (error) {
+      searchResults.hidden = true;
+    }
+  }, 250);
+});
+searchResults.addEventListener('click', event => {
+  const button = event.target.closest('[data-symbol]');
+  if (!button) return;
+  openSearchedTicker(button.dataset.symbol);
+});
+async function openSearchedTicker(ticker, fallbackName) {
   searchMessage.textContent = `Looking up ${ticker}...`;
   try {
     const quote = (await NorthstarAPI.quotes([ticker])).quotes[0];
     const existing = stocks.find(stock => stock.ticker === ticker);
-    const entry = existing || { ticker, name: ticker === 'VST' ? 'Vistra Corp.' : ticker, sector: 'all', cap: '—', pe: '—', roe: '—', growth: '—', icon: ticker.slice(0, 1) };
+    const entry = existing || { ticker, name: fallbackName || ticker, sector: 'all', cap: '—', pe: '—', roe: '—', growth: '—', icon: ticker.slice(0, 1) };
     entry.price = `$${Number(quote.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     entry.change = `${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%`;
     if (!existing) stocks.unshift(entry);
     activeSector = 'all';
     document.querySelectorAll('.chip').forEach(chip => chip.classList.toggle('selected', chip.dataset.filter === 'all'));
-    renderRows(); window.openProfile?.(ticker); stockSearch.hidden = true; searchInput.value = ''; searchMessage.textContent = 'Enter a US ticker to add it to this screen.';
-  } catch (error) { searchMessage.textContent = `Could not find a current quote for ${ticker}. Try a listed US ticker.`; }
+    renderRows(); window.openProfile?.(ticker); stockSearch.hidden = true; searchResults.hidden = true; searchInput.value = '';
+    searchMessage.textContent = 'Search any company in the S&P 500 or Nasdaq-100, or enter a US ticker.';
+  } catch (error) {
+    searchMessage.textContent = NorthstarAPI.staticMode
+      ? `No data for ${ticker} on this site — it is outside the S&P 500 / Nasdaq-100 set. The live version covers any US ticker.`
+      : `Could not find a current quote for ${ticker}. Try a listed US ticker.`;
+  }
+}
+document.querySelector('#stockSearchForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const query = searchInput.value.trim().toUpperCase();
+  const first = lastSuggestions.find(result => result.symbol === query) || lastSuggestions[0];
+  if (first && (first.symbol === query || first.name.toUpperCase().includes(query))) {
+    openSearchedTicker(first.symbol, first.name);
+    return;
+  }
+  if (!/^[A-Z0-9.\-]{1,10}$/.test(query)) { searchMessage.textContent = 'Enter a valid US ticker, such as VST or MSFT.'; return; }
+  openSearchedTicker(query);
 });
 const stripMap = [['#mkt-sp', '^GSPC'], ['#mkt-nq', '^IXIC'], ['#mkt-dj', '^DJI'], ['#mkt-vix', '^VIX']];
 async function refreshStrip() {

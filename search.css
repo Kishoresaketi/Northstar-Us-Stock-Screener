@@ -1,1 +1,7 @@
 .stock-search{position:fixed;z-index:6;top:12px;left:50%;transform:translateX(-50%);width:min(510px,calc(100vw - 28px));background:#fff;border:1px solid var(--line);box-shadow:0 12px 32px rgba(17,35,27,.16);padding:8px 12px 10px}.stock-search form{display:flex;align-items:center;gap:9px}.stock-search form>svg{width:17px;color:#64716a}.stock-search input{border:0;outline:0;min-width:0;flex:1;height:35px;font:600 13px Manrope;color:var(--ink)}.stock-search p{margin:5px 0 0 26px;color:#77837c;font-size:10px}
+.search-results{margin:6px 0 0 26px;border-top:1px solid var(--line);padding-top:4px}
+.search-results button{display:flex;width:100%;align-items:baseline;gap:8px;background:none;border:0;padding:6px 2px;cursor:pointer;text-align:left;font:600 12px Manrope;color:var(--ink)}
+.search-results button:hover{background:#f4f6f3}
+.search-results button b{font-family:'DM Mono',monospace;font-size:12px}
+.search-results button span{color:#64716a;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-results button em{margin-left:auto;font-style:normal;font-size:10px;color:#94a39a;white-space:nowrap}

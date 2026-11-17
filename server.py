@@ -10,6 +10,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 from api.financials import get_financials
 from api.fundamentals import get_fundamentals
+from api.search import search_companies
 
 CACHE_SECONDS = 15
 quote_cache = {"timestamp": 0, "symbols": "", "quotes": []}
@@ -29,13 +30,27 @@ def get_quote(symbol):
 
 
 def get_chart(symbol, period):
+    # Same shape as api/chart.py: compact [timestamp, close] pairs, weekly
+    # sampled for 5y/10y. Kept in sync with api/chart.py on purpose.
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?range={urllib.parse.quote(period)}&interval=1d"
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Northstar Local Screener)"})
     with urllib.request.urlopen(request, timeout=10) as response:
         payload = json.load(response)
     result = payload["chart"]["result"][0]
     closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
-    points = [{"time": stamp, "close": close} for stamp, close in zip(result.get("timestamp", []), closes) if close is not None]
+    points = [[stamp, close] for stamp, close in zip(result.get("timestamp", []), closes) if close is not None]
+    if period in {"5y", "10y"} and len(points) > 300:
+        from datetime import datetime, timezone
+        weekly = []
+        last_week = None
+        for stamp, close in points:
+            week = datetime.fromtimestamp(stamp, tz=timezone.utc).isocalendar()[:2]
+            if week != last_week:
+                weekly.append([stamp, close])
+                last_week = week
+            else:
+                weekly[-1] = [stamp, close]
+        points = weekly
     meta = result.get("meta", {})
     return {"symbol": symbol, "points": points, "price": meta.get("regularMarketPrice"),
             "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh"), "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow")}
@@ -44,6 +59,25 @@ def get_chart(symbol, period):
 class Server(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/search":
+            query = urllib.parse.parse_qs(parsed.query)
+            text = query.get("q", [""])[0]
+            if not text.strip():
+                self.send_error(400, "Provide a search query")
+                return
+            try:
+                body = json.dumps({"results": search_companies(text)}).encode()
+            except Exception:
+                self.send_error(503, "Search service temporarily unavailable")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "max-age=3600")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if parsed.path == "/api/financials":
             query = urllib.parse.parse_qs(parsed.query)
             symbol = query.get("symbol", [""])[0].upper()

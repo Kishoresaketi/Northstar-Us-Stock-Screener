@@ -1,13 +1,20 @@
 const companyProfiles = {
-  VST: { name: 'Vistra Corp.', sector: 'Utilities', pros: ['Expanding nuclear generation portfolio supports long-term contracted demand.', 'Strong free-cash-flow conversion can support capital returns.', 'Scale across generation and retail creates operating flexibility.'], cons: ['Wholesale power prices and weather can make earnings uneven.', 'Leverage remains meaningful for a capital-intensive utility.', 'Regulatory changes can affect investment returns.'], peers: ['Constellation Energy', 'NRG Energy', 'Duke Energy'] },
-  AAPL: { name: 'Apple Inc.', sector: 'Technology', pros: ['Premium ecosystem supports customer retention and services growth.', 'Exceptional cash generation funds buybacks and investment.', 'Global brand and distribution create a durable competitive position.'], cons: ['Hardware upgrade cycles can pressure revenue growth.', 'Regulatory scrutiny of app distribution remains elevated.', 'Revenue exposure to consumer spending and foreign exchange.'], peers: ['Microsoft', 'Alphabet', 'Samsung Electronics'] },
-  MSFT: { name: 'Microsoft Corp.', sector: 'Technology', pros: ['Recurring cloud and enterprise software revenue.', 'AI distribution through an established enterprise base.', 'High-margin business mix supports durable cash generation.'], cons: ['Cloud investment intensity may pressure near-term margins.', 'Competition in cloud infrastructure remains fierce.', 'Large enterprise exposure can slow in weaker IT budgets.'], peers: ['Alphabet', 'Oracle', 'Amazon'] }
+  VST: { name: 'Vistra Corp.', sector: 'Utilities' },
+  AAPL: { name: 'Apple Inc.', sector: 'Information Technology' },
+  MSFT: { name: 'Microsoft Corp.', sector: 'Information Technology' },
+  NVDA: { name: 'NVIDIA Corp.', sector: 'Information Technology' },
+  GOOGL: { name: 'Alphabet Inc.', sector: 'Communication Services' },
+  LLY: { name: 'Eli Lilly & Co.', sector: 'Health Care' },
+  JPM: { name: 'JPMorgan Chase', sector: 'Financials' },
+  XOM: { name: 'Exxon Mobil Corp.', sector: 'Energy' },
 };
 const profileMain = document.querySelector('#profileView');
 let profileSymbol = 'VST';
+let profileRange = '1y';
+let profileTimer = null;
 
 function profileFor(symbol) {
-  const base = companyProfiles[symbol] || { name: symbol, sector: 'US Equity', pros: ['Latest market price is available through the local quote service.', 'Company research can be added to a dedicated watchlist.', 'Historical price performance is available across all selected ranges.'], cons: ['Financial statements come from SEC EDGAR filings; companies that do not file with the SEC show price data only.', 'Reported figures should be verified against company filings.', 'Market prices may be delayed by the public data source.'] };
+  const base = companyProfiles[symbol] || { name: symbol, sector: 'US Equity' };
   return { ...base, symbol };
 }
 function money(value) { return value === null ? '—' : `$${Number(value).toLocaleString('en-US')}`; }
@@ -84,8 +91,17 @@ function renderFinancials(data) {
 }
 
 function renderSnapshot(profile, data) {
-  document.querySelector('#prosList').innerHTML = profile.pros.map(item => `<li>${item}</li>`).join('');
-  document.querySelector('#consList').innerHTML = profile.cons.map(item => `<li>${item}</li>`).join('');
+  // Pros & cons are computed from the filing data (see lib/edgar.py
+  // pros_cons) — nothing here is editorial. Before the data loads, or when
+  // the filings support no statement either way, say so plainly.
+  const pros = data ? (data.pros || []) : null;
+  const cons = data ? (data.cons || []) : null;
+  document.querySelector('#prosList').innerHTML = pros === null
+    ? '<li>Loading strengths from the company filings…</li>'
+    : (pros.length ? pros.map(item => `<li>${item}</li>`).join('') : '<li>No strengths stand out from the filings.</li>');
+  document.querySelector('#consList').innerHTML = cons === null
+    ? '<li>Loading watchouts from the company filings…</li>'
+    : (cons.length ? cons.map(item => `<li>${item}</li>`).join('') : '<li>No watchouts stand out from the filings.</li>');
   const m = data ? (data.metrics || {}) : {};
   const annual = data ? (data.annual || []) : [];
   const latest = annual.length ? annual[annual.length - 1] : null;
@@ -118,13 +134,39 @@ async function loadChart(range) {
     if (cell && data.fiftyTwoWeekHigh != null && data.fiftyTwoWeekLow != null) {
       cell.textContent = `$${Number(data.fiftyTwoWeekLow).toLocaleString('en-US', { maximumFractionDigits: 2 })} – $${Number(data.fiftyTwoWeekHigh).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
     }
-    const values = points.map(point => point.close); const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(max - min, 1);
+    const values = points.map(point => Array.isArray(point) ? point[1] : point.close); const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(max - min, 1);
     const coords = values.map((value, index) => `${(index / Math.max(values.length - 1, 1) * 1000).toFixed(2)},${(282 - ((value - min) / span * 242)).toFixed(2)}`);
     svg.innerHTML = `<path class="area" d="M0,300 L${coords.join(' L')} L1000,300 Z"></path><path class="line" d="M${coords.join(' L')}"></path>`;
     loading.hidden = true;
   } catch (error) {
     loading.textContent = 'Price history unavailable right now.';
   }
+}
+async function refreshProfileQuote() {
+  try {
+    const quote = (await NorthstarAPI.quotes([profileSymbol])).quotes[0];
+    if (!quote) return;
+    profilePrice.textContent = `$${Number(quote.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    profileChange.textContent = `${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%`;
+    profileChange.className = quote.changePercent < 0 ? 'negative' : 'positive';
+    document.querySelector('#profileUpdated').textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  } catch (error) {
+    /* keep the last price when the quote feed is down */
+  }
+}
+function startProfileRefresh() {
+  if (profileTimer) clearInterval(profileTimer);
+  // Refresh the price every minute while a profile is open, and the chart
+  // too in live mode. In static mode the chart is a snapshot rebuilt by
+  // the hourly/daily workflow, so re-fetching it would only return the
+  // same file — the quote still refreshes from the rebuilt data.
+  profileTimer = setInterval(() => {
+    refreshProfileQuote();
+    if (!NorthstarAPI.staticMode) loadChart(profileRange);
+  }, 60000);
+}
+function stopProfileRefresh() {
+  if (profileTimer) { clearInterval(profileTimer); profileTimer = null; }
 }
 window.openProfile = async function(symbol) {
   profileSymbol = symbol; const profile = profileFor(symbol); const stock = stocks.find(item => item.ticker === symbol);
@@ -133,11 +175,14 @@ window.openProfile = async function(symbol) {
   if (stock) { profilePrice.textContent = stock.price; profileChange.textContent = stock.change; profileChange.className = stock.change.startsWith('-') ? 'negative' : 'positive'; }
   renderFinancialsUnavailable('Loading filings…');
   renderSnapshot(profile, null);
+  profileRange = '1y';
   document.querySelectorAll('.range-switch button').forEach(button => button.classList.toggle('selected', button.dataset.range === '1y'));
   loadChart('1y');
+  startProfileRefresh();
   try {
     const data = await NorthstarAPI.financials(symbol);
     profileName.textContent = data.name || profile.name;
+    if (data.sector) profileTicker.textContent = `${symbol} · ${data.sector}`;
     profilePrice.textContent = `$${Number(data.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const change = data.changePercent;
     profileChange.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
@@ -154,6 +199,6 @@ window.openProfile = async function(symbol) {
   }
   window.scrollTo(0, 0);
 };
-document.querySelector('#backToScreener').addEventListener('click', () => { profileMain.hidden = true; document.querySelector('#screenerMain').hidden = false; });
-document.querySelector('#rangeSwitch').addEventListener('click', event => { const button = event.target.closest('[data-range]'); if (!button) return; document.querySelectorAll('.range-switch button').forEach(item => item.classList.toggle('selected', item === button)); loadChart(button.dataset.range); });
+document.querySelector('#backToScreener').addEventListener('click', () => { stopProfileRefresh(); profileMain.hidden = true; document.querySelector('#screenerMain').hidden = false; });
+document.querySelector('#rangeSwitch').addEventListener('click', event => { const button = event.target.closest('[data-range]'); if (!button) return; profileRange = button.dataset.range; document.querySelectorAll('.range-switch button').forEach(item => item.classList.toggle('selected', item === button)); loadChart(button.dataset.range); });
 document.querySelector('#companyNav').addEventListener('click', event => { const button = event.target.closest('[data-section]'); if (!button) return; document.querySelectorAll('.company-nav button').forEach(item => item.classList.toggle('active', item === button)); document.querySelectorAll('.profile-section').forEach(section => section.classList.toggle('active', section.id === button.dataset.section)); window.scrollTo(0, 0); });

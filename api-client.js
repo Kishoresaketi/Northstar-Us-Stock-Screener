@@ -55,5 +55,22 @@ const NorthstarAPI = (() => {
     return getJSON(`data/financials/${fileFor(symbol)}.json`);
   }
 
-  return { quotes, chart, fundamentals, financials, staticMode };
+  let searchIndex = null;
+  async function search(query) {
+    const text = (query || '').trim().toUpperCase();
+    if (!text) return [];
+    if (!staticMode) {
+      const data = await getJSON(`/api/search?q=${encodeURIComponent(text)}`);
+      return data.results || [];
+    }
+    // Static mode: the pre-built index covers the S&P 500 + Nasdaq-100
+    // universe (518 companies). Anything outside it needs the live API.
+    if (!searchIndex) searchIndex = await getJSON('data/search-index.json');
+    const matches = searchIndex.filter(entry =>
+      entry.symbol.includes(text) || entry.name.toUpperCase().includes(text));
+    matches.sort((a, b) => (a.symbol.startsWith(text) ? 0 : 1) - (b.symbol.startsWith(text) ? 0 : 1) || a.symbol.localeCompare(b.symbol));
+    return matches.slice(0, 10).map(entry => ({ ...entry, inUniverse: true }));
+  }
+
+  return { quotes, chart, fundamentals, financials, search, staticMode };
 })();

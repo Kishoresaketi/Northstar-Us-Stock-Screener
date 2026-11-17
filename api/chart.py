@@ -9,13 +9,33 @@ VALID_RANGES = {"1mo", "6mo", "1y", "3y", "5y", "10y", "max"}
 
 
 def get_chart(symbol, period):
+    """Price history as compact [timestamp, close] pairs.
+
+    Long ranges are weekly sampled: a 10-year daily series is ~2,500 points
+    on a 1,000px chart, so weekly points look identical and keep the static
+    data files small enough for a ~500-ticker build. Yahoo already returns
+    the max range coarsely (~170 points), so it is left as-is.
+    """
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?range={urllib.parse.quote(period)}&interval=1d"
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Northstar Screener)"})
     with urllib.request.urlopen(request, timeout=10) as response:
         payload = json.load(response)
     result = payload["chart"]["result"][0]
     closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
-    points = [{"time": stamp, "close": close} for stamp, close in zip(result.get("timestamp", []), closes) if close is not None]
+    points = [[stamp, close] for stamp, close in zip(result.get("timestamp", []), closes) if close is not None]
+    if period in {"5y", "10y"} and len(points) > 300:
+        # One point per calendar week (the last close of the week).
+        from datetime import datetime, timezone
+        weekly = []
+        last_week = None
+        for stamp, close in points:
+            week = datetime.fromtimestamp(stamp, tz=timezone.utc).isocalendar()[:2]
+            if week != last_week:
+                weekly.append([stamp, close])
+                last_week = week
+            else:
+                weekly[-1] = [stamp, close]
+        points = weekly
     meta = result.get("meta", {})
     return {"symbol": symbol, "points": points, "price": meta.get("regularMarketPrice"),
             "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh"), "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow")}

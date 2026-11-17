@@ -2,33 +2,55 @@
 """Build the static data files served on GitHub Pages (data/*.json).
 
 Reads live data with the same functions the /api/* endpoints use, so the
-static files have exactly the same shapes as the API responses. Run by
-.github/workflows/refresh-data.yml every hour, or locally:
+static files have exactly the same shapes as the API responses. The universe
+is the S&P 500 + Nasdaq-100 snapshot in scripts/universe/universe.json
+(~518 tickers), each with quotes, fundamentals, financials, and all seven
+chart ranges.
 
-    python3 scripts/build_static_data.py
+Modes:
+    python3 scripts/build_static_data.py            # full rebuild (default)
+    python3 scripts/build_static_data.py --mode fast # quotes only (hourly)
+    python3 scripts/build_static_data.py --mode full # everything (daily)
+    python3 scripts/build_static_data.py --mode auto # full at 02 UTC, else fast
+
+The workflow (.github/workflows/refresh-data.yml) runs auto on both its
+schedules: fast hourly and full once a day at 02:07 UTC. Quotes move every
+hour, but filings and chart history only change on new filings and new
+trading days, so a full rebuild every hour would burn the free data
+sources and the git history for nothing.
 
 A file that fails to refresh keeps its previous version; the run only fails
-if nothing at all was written.
+if nothing at all was written. Failed jobs are retried once at the end.
 """
 
+import argparse
 import json
 import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
 
+import lib.edgar as edgar
 from api.chart import get_chart
 from api.financials import get_financials
 from api.fundamentals import get_fundamentals
 from api.quotes import get_quote
 
-TICKERS = ["AAPL", "MSFT", "NVDA", "GOOGL", "LLY", "JPM", "XOM", "VST"]
+UNIVERSE_PATH = os.path.join(ROOT, "scripts", "universe", "universe.json")
 INDICES = ["^GSPC", "^IXIC", "^DJI", "^VIX"]
 RANGES = ["1mo", "6mo", "1y", "3y", "5y", "10y", "max"]
 DATA = os.path.join(ROOT, "data")
+PEER_COUNT = 10
+
+
+def load_universe():
+    with open(UNIVERSE_PATH, encoding="utf-8") as fh:
+        universe = json.load(fh)
+    return sorted(universe)
 
 
 def file_for(symbol):
@@ -62,6 +84,63 @@ def build_chart(symbol, period):
     write(os.path.join(DATA, "chart", f"{file_for(symbol)}-{period}.json"), get_chart(symbol, period))
 
 
+def build_search_index(tickers):
+    with open(UNIVERSE_PATH, encoding="utf-8") as fh:
+        universe = json.load(fh)
+    index = [{"symbol": s, "name": universe[s]["name"], "sector": universe[s].get("sector")}
+             for s in tickers if s in universe]
+    write(os.path.join(DATA, "search-index.json"), index)
+
+
+def build_peer_map(tickers):
+    """Peer lists for every ticker, written to data/peer-map.json.
+
+    The seeded eight keep their curated lists (lib/edgar.py PEERS). Every
+    other ticker gets same-sub-industry peers first, then same-sector peers,
+    ranked by market cap — up to PEER_COUNT. Caps come from live metrics;
+    a ticker whose filings cannot be read still gets peers by sector order.
+    """
+    with open(UNIVERSE_PATH, encoding="utf-8") as fh:
+        universe = json.load(fh)
+
+    def _cap(symbol):
+        try:
+            return edgar.metrics(symbol).get("cap") or 0
+        except Exception:
+            return 0
+
+    caps = {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_cap, s): s for s in tickers}
+        for future in as_completed(futures):
+            caps[futures[future]] = future.result()
+
+    by_sub = {}
+    by_sector = {}
+    for symbol in tickers:
+        entry = universe.get(symbol, {})
+        by_sub.setdefault(entry.get("subindustry"), []).append(symbol)
+        by_sector.setdefault(entry.get("sector"), []).append(symbol)
+    for group in list(by_sub.values()) + list(by_sector.values()):
+        group.sort(key=lambda s: caps.get(s, 0), reverse=True)
+
+    peer_map = {}
+    for symbol in tickers:
+        if symbol in edgar.PEERS:
+            peer_map[symbol] = list(edgar.PEERS[symbol])
+            continue
+        entry = universe.get(symbol, {})
+        chosen = [s for s in by_sub.get(entry.get("subindustry"), []) if s != symbol]
+        if len(chosen) < PEER_COUNT:
+            chosen += [s for s in by_sector.get(entry.get("sector"), [])
+                       if s != symbol and s not in chosen]
+        peer_map[symbol] = chosen[:PEER_COUNT]
+    write(os.path.join(DATA, "peer-map.json"), peer_map)
+    counts = {s: len(v) for s, v in peer_map.items()}
+    print(f"peer map: {len(peer_map)} tickers, "
+          f"min {min(counts.values())} / max {max(counts.values())} peers")
+
+
 def guard(fn, *args):
     try:
         fn(*args)
@@ -71,20 +150,65 @@ def guard(fn, *args):
         return False
 
 
-def main():
-    jobs = []
+def run_jobs(jobs):
+    failed = []
+    done = 0
     with ThreadPoolExecutor(max_workers=8) as executor:
-        for symbol in TICKERS + INDICES:
-            jobs.append(executor.submit(guard, build_quote, symbol))
-        for symbol in TICKERS:
-            jobs.append(executor.submit(guard, build_fundamentals, symbol))
-            jobs.append(executor.submit(guard, build_financials, symbol))
-            for period in RANGES:
-                jobs.append(executor.submit(guard, build_chart, symbol, period))
-        results = [future.result() for future in as_completed(jobs)]
-    ok = sum(results)
-    print(f"refreshed {ok}/{len(results)} files")
-    return 0 if ok else 1
+        futures = {executor.submit(guard, fn, *args): (fn, args) for fn, args in jobs}
+        for i, future in enumerate(as_completed(futures), 1):
+            if future.result():
+                done += 1
+            else:
+                failed.append(futures[future])
+            if i % 250 == 0:
+                print(f"  ... {i}/{len(futures)} jobs done")
+    return done, failed
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["fast", "full", "auto"], default="full")
+    args = parser.parse_args()
+    mode = args.mode
+    if mode == "auto":
+        # The workflow runs this on both schedules: full rebuild once a day
+        # at 02 UTC (after the US close settles), quotes-only every other hour.
+        mode = "full" if datetime.now(timezone.utc).hour == 2 else "fast"
+        print(f"auto mode -> {mode} (UTC hour {datetime.now(timezone.utc).hour})")
+    tickers = load_universe()
+    print(f"universe: {len(tickers)} tickers (+ {len(INDICES)} indices)")
+
+    if mode == "fast":
+        jobs = [(build_quote, (s,)) for s in tickers + INDICES]
+        done, failed = run_jobs(jobs)
+        if failed:
+            print(f"retrying {len(failed)} failed quote jobs")
+            done2, _ = run_jobs(failed)
+            done += done2
+        print(f"refreshed {done}/{len(jobs)} files (fast mode)")
+        return 0 if done else 1
+
+    build_peer_map(tickers)
+    build_search_index(tickers)
+    jobs = []
+    for symbol in tickers + INDICES:
+        jobs.append((build_quote, (symbol,)))
+    for symbol in tickers:
+        jobs.append((build_fundamentals, (symbol,)))
+        jobs.append((build_financials, (symbol,)))
+        for period in RANGES:
+            jobs.append((build_chart, (symbol, period)))
+    done, failed = run_jobs(jobs)
+    if failed:
+        print(f"retrying {len(failed)} failed jobs")
+        done2, failed2 = run_jobs(failed)
+        done += done2
+        if failed2:
+            print(f"still failing after retry: {len(failed2)}")
+            for fn, fn_args in failed2[:20]:
+                print(f"  {fn.__name__} {fn_args}")
+    print(f"refreshed {done}/{len(jobs)} files (full mode)")
+    return 0 if done else 1
 
 
 if __name__ == "__main__":

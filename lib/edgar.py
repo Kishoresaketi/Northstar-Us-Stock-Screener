@@ -18,6 +18,7 @@ Data notes (learned the hard way, 2026-11-16):
 
 import gzip
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -30,18 +31,168 @@ TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json"
 
 # Curated sector peers for the screener's seeded stocks (same-industry names).
+# Every built ticker gets peers: these curated lists for the seeded eight,
+# and for every other ticker the sector-derived peer map built by
+# scripts/build_static_data.py (data/peer-map.json: same sub-industry first,
+# then same sector, ranked by market cap). No cap on the count — include
+# every peer that genuinely belongs.
 PEERS = {
-    "AAPL": ["MSFT", "GOOGL", "NVDA"],
-    "MSFT": ["AAPL", "GOOGL", "NVDA"],
-    "NVDA": ["AMD", "MSFT", "AVGO"],
-    "GOOGL": ["MSFT", "META", "AAPL"],
-    "LLY": ["JNJ", "PFE", "MRK", "NVO"],
-    "JPM": ["BAC", "WFC", "GS", "C"],
-    "XOM": ["CVX", "COP", "SLB"],
+    "AAPL": ["MSFT", "GOOGL", "NVDA", "META", "AVGO", "AMD", "AMZN", "ORCL", "CRM", "ADBE", "INTC", "QCOM"],
+    "MSFT": ["AAPL", "GOOGL", "NVDA", "META", "AMZN", "ORCL", "CRM", "ADBE", "IBM", "INTU"],
+    "NVDA": ["AMD", "MSFT", "AVGO", "MU", "INTC", "QCOM", "TXN", "MRVL", "LRCX", "AMAT"],
+    "GOOGL": ["MSFT", "META", "AAPL", "AMZN", "NVDA", "NFLX", "CRM", "ADBE", "ORCL", "UBER"],
+    "LLY": ["JNJ", "PFE", "MRK", "ABBV", "AMGN", "BMY", "GILD", "VRTX", "ZTS", "REGN"],
+    "JPM": ["BAC", "WFC", "GS", "C", "MS", "USB", "PNC", "TFC", "COF", "AXP"],
+    "XOM": ["CVX", "COP", "SLB", "EOG", "MPC", "PSX", "OXY", "HAL", "DVN", "FANG"],
+    "VST": ["CEG", "NRG", "DUK", "NEE", "SO", "D", "EXC", "AEP", "XEL", "PEG"],
 }
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_UNIVERSE_PATH = os.path.join(_ROOT, "scripts", "universe", "universe.json")
+_PEER_MAP_PATH = os.path.join(_ROOT, "data", "peer-map.json")
+_universe = None
+_peer_map = {"mtime": 0, "data": {}}
+
+
+def universe():
+    """S&P 500 + Nasdaq-100 snapshot: symbol -> {name, sector, subindustry, indices}."""
+    global _universe
+    if _universe is None:
+        try:
+            with open(_UNIVERSE_PATH, encoding="utf-8") as fh:
+                _universe = json.load(fh)
+        except (OSError, ValueError):
+            _universe = {}
+    return _universe
+
+
+def universe_entry(symbol):
+    return universe().get(symbol.upper())
+
+
+def peer_map():
+    """Sector-derived peer lists (data/peer-map.json), reloaded when the file changes."""
+    try:
+        mtime = os.path.getmtime(_PEER_MAP_PATH)
+    except OSError:
+        return {}
+    if mtime != _peer_map["mtime"]:
+        try:
+            with open(_PEER_MAP_PATH, encoding="utf-8") as fh:
+                _peer_map["data"] = json.load(fh)
+            _peer_map["mtime"] = mtime
+        except (OSError, ValueError):
+            return {}
+    return _peer_map["data"]
+
+
+def peers_for(symbol):
+    """Peer tickers for a symbol: curated list first, else the sector-derived map."""
+    symbol = symbol.upper()
+    if symbol in PEERS:
+        return list(PEERS[symbol])
+    return list(peer_map().get(symbol, []))
+
+
+def _fmt_short(value):
+    if value is None:
+        return None
+    if abs(value) >= 1e12:
+        return f"${value / 1e12:.1f}T"
+    if abs(value) >= 1e9:
+        return f"${value / 1e9:.1f}B"
+    if abs(value) >= 1e6:
+        return f"${value / 1e6:.0f}M"
+    return f"${value:,.0f}"
+
+
+def _median(values):
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    n = len(vals)
+    return vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+
+
+def pros_cons(metrics, annual, ratios, peers):
+    """Strengths and watchouts computed from the filing data — nothing here
+    is editorial. Each item cites the figure it rests on; anything the data
+    cannot support is simply left out."""
+    pros, cons = [], []
+    m = metrics or {}
+    roe, roce = m.get("roe"), m.get("roce")
+    growth, pe = m.get("growth"), m.get("pe")
+    de = m.get("debt_equity")
+    latest = annual[-1] if annual else {}
+    prior = annual[-2] if len(annual) >= 2 else {}
+    latest_ratio = ratios[-1] if ratios else {}
+    prior_ratio = ratios[-2] if len(ratios) >= 2 else {}
+    peer_pes = [p.get("pe") for p in (peers or [])]
+    peer_pe_median = _median(peer_pes)
+
+    if roe is not None and roe >= 0.20:
+        pros.append(f"Return on equity of {roe:.1%} on trailing earnings.")
+    if growth is not None and growth >= 0.10:
+        pros.append(f"Revenue grew {growth:.1%} over the last twelve months.")
+    nm = latest_ratio.get("net_margin")
+    if nm is not None and nm >= 0.15:
+        pros.append(f"Net margin of {nm:.1%} in FY{latest.get('fy')} — profitable at scale.")
+    if roce is not None and roce >= 0.15:
+        pros.append(f"Return on capital employed of {roce:.1%}.")
+    fcf, prev_fcf = latest.get("fcf"), prior.get("fcf")
+    if fcf is not None and fcf > 0 and prev_fcf:
+        if fcf > prev_fcf:
+            pros.append(f"Free cash flow of {_fmt_short(fcf)} in FY{latest.get('fy')}, up from {_fmt_short(prev_fcf)} the year before.")
+        else:
+            pros.append(f"Free cash flow of {_fmt_short(fcf)} in FY{latest.get('fy')}.")
+    if de is not None and de < 0.5:
+        pros.append(f"Modest leverage — debt is {de:.2f}× equity.")
+    div = latest.get("dividends")
+    if div:
+        pros.append(f"Paid {_fmt_short(div)} in dividends in FY{latest.get('fy')}.")
+    if pe is not None and peer_pe_median:
+        if pe < peer_pe_median * 0.85:
+            pros.append(f"Trades at {pe:.1f}× earnings, below the peer median of {peer_pe_median:.1f}×.")
+    revs = [r.get("revenue") for r in annual if r.get("revenue")]
+    if len(revs) >= 5 and revs[0] and revs[-1] and revs[-1] > 0 and revs[0] > 0:
+        cagr = (revs[-1] / revs[0]) ** (1 / (len(revs) - 1)) - 1
+        if cagr >= 0.08:
+            pros.append(f"Revenue compounded at {cagr:.1%} a year over the last {len(revs) - 1} years.")
+    cr = latest_ratio.get("current_ratio")
+    if cr is not None and cr >= 1.5:
+        pros.append(f"Current ratio of {cr:.2f} — short-term liquidity is comfortable.")
+
+    if growth is not None and growth < 0:
+        cons.append(f"Revenue fell {abs(growth):.1%} over the last twelve months.")
+    if roe is not None and roe < 0.10:
+        if roe < 0:
+            cons.append(f"Return on equity was negative at {roe:.1%} on trailing earnings.")
+        else:
+            cons.append(f"Return on equity of {roe:.1%} is below 10%.")
+    if nm is not None and nm < 0.05:
+        cons.append(f"Net margin of {nm:.1%} in FY{latest.get('fy')} is thin.")
+    if de is not None and de > 1.5:
+        cons.append(f"Leverage is high — debt is {de:.2f}× equity.")
+    if fcf is not None and fcf < 0:
+        cons.append(f"Free cash flow was negative in FY{latest.get('fy')}.")
+    elif fcf is not None and prev_fcf and fcf < prev_fcf * 0.8:
+        cons.append(f"Free cash flow fell from {_fmt_short(prev_fcf)} to {_fmt_short(fcf)} in FY{latest.get('fy')}.")
+    if pe is not None and peer_pe_median and pe > peer_pe_median * 1.25:
+        cons.append(f"Trades at {pe:.1f}× earnings, above the peer median of {peer_pe_median:.1f}×.")
+    ni, prev_ni = latest.get("net_income"), prior.get("net_income")
+    if ni is not None and prev_ni and ni < prev_ni * 0.9:
+        cons.append(f"Net income fell from {_fmt_short(prev_ni)} to {_fmt_short(ni)} in FY{latest.get('fy')}.")
+    if cr is not None and cr < 1.0:
+        cons.append(f"Current ratio of {cr:.2f} — current liabilities exceed current assets.")
+    opm, prev_opm = latest_ratio.get("opm"), prior_ratio.get("opm")
+    if opm is not None and prev_opm is not None and opm < prev_opm - 0.03:
+        cons.append(f"Operating margin narrowed to {opm:.1%} in FY{latest.get('fy')}.")
+    return {"pros": pros[:3], "cons": cons[:3]}
+
 
 _tickers = {"at": 0, "data": {}}
 _facts_cache = {}
+_price_cache = {}
 
 
 def _get_json(url):
@@ -68,7 +219,13 @@ def company_name(symbol):
 
 
 def facts(symbol):
-    """Parsed companyfacts JSON for a ticker, cached an hour."""
+    """Parsed companyfacts JSON for a ticker, cached an hour.
+
+    The cache is bounded (16 entries): a parsed facts file can be tens of
+    megabytes in memory, and a build over ~500 tickers would otherwise
+    exhaust RAM by holding them all. Eviction is FIFO — the working set for
+    one company's financials (itself + ~10 peers) fits comfortably.
+    """
     symbol = symbol.upper()
     entry = _facts_cache.get(symbol)
     if entry and time.time() - entry[0] < 3600:
@@ -77,12 +234,23 @@ def facts(symbol):
     if not found:
         raise ValueError(f"No SEC filings for {symbol}")
     data = _get_json(FACTS_URL.format(str(found[0]).zfill(10)))
+    while len(_facts_cache) >= 16:
+        _facts_cache.pop(next(iter(_facts_cache)))
     _facts_cache[symbol] = (time.time(), data)
     return data
 
 
 def live_price(symbol):
-    """Current price + daily change % from Yahoo's public chart API."""
+    """Current price + daily change % from Yahoo's public chart API.
+
+    Cached 60 seconds in-process so a build that asks for the same symbol
+    repeatedly (table, fundamentals, financials, peer warm-up) does not
+    hammer Yahoo with duplicate calls.
+    """
+    symbol = symbol.upper()
+    cached = _price_cache.get(symbol)
+    if cached and time.time() - cached[0] < 60:
+        return cached[1]
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?range=1d&interval=1m"
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Northstar Screener)"})
     with urllib.request.urlopen(request, timeout=6) as response:
@@ -90,7 +258,9 @@ def live_price(symbol):
     price = meta.get("regularMarketPrice", meta.get("previousClose"))
     previous = meta.get("chartPreviousClose", meta.get("previousClose"))
     change = ((price - previous) / previous) * 100 if price and previous else None
-    return {"price": price, "changePercent": change}
+    result = {"price": price, "changePercent": change}
+    _price_cache[symbol] = (time.time(), result)
+    return result
 
 
 def _points(facts, concept):
@@ -181,13 +351,28 @@ def _days_between(start, end):
     return (b - a).days
 
 
-def _annual_concept(facts, concepts, flow=True):
-    """Annual points for the concept with the most recent coverage."""
-    best = []
+def _annual_concept(facts, concepts, flow=True, prefer=None):
+    """Annual points for the concept with the most recent coverage.
+
+    If `prefer` is given and its coverage is as current as the best
+    (latest end within 45 days), its points win: for net income this
+    prefers income attributable to common shareholders over total
+    income, which is the figure that belongs to the share price (a
+    filer with large noncontrolling interests would otherwise show
+    total income divided by common shares only — a wrong EPS).
+    """
+    by_concept = {}
     for concept in concepts:
         points = _annual(facts, concept) or _annual_derived(facts, concept, flow)
-        if points and (not best or points[-1]["end"] > best[-1]["end"]):
-            best = points
+        if points:
+            by_concept[concept] = points
+    if not by_concept:
+        return []
+    best = max(by_concept.values(), key=lambda pts: pts[-1]["end"])
+    if prefer in by_concept:
+        pref = by_concept[prefer]
+        if _days_between(pref[-1]["end"], best[-1]["end"]) <= 45:
+            return pref
     return best
 
 
@@ -217,19 +402,26 @@ def _annual_derived(facts, concept, flow):
     return out
 
 
-def _quarterly_concept(facts, concepts):
-    best = []
+def _quarterly_concept(facts, concepts, prefer=None):
+    by_concept = {}
     for concept in concepts:
         points = _quarterly(facts, concept)
-        if points and (not best or points[-1]["end"] > best[-1]["end"]):
-            best = points
+        if points:
+            by_concept[concept] = points
+    if not by_concept:
+        return []
+    best = max(by_concept.values(), key=lambda pts: pts[-1]["end"])
+    if prefer in by_concept:
+        pref = by_concept[prefer]
+        if _days_between(pref[-1]["end"], best[-1]["end"]) <= 45:
+            return pref
     return best
 
 
-def _quarterly_series(facts, concept, fallbacks=()):
+def _quarterly_series(facts, concept, fallbacks=(), prefer=None):
     """Chronological quarters including Q4 derived as FY minus Q1-Q3."""
-    annual = _annual_concept(facts, [concept, *fallbacks])
-    quarters = _quarterly_concept(facts, [concept, *fallbacks])
+    annual = _annual_concept(facts, [concept, *fallbacks], prefer=prefer)
+    quarters = _quarterly_concept(facts, [concept, *fallbacks], prefer=prefer)
     out = []
     prev_end = None
     for a in annual:
@@ -281,11 +473,41 @@ def _shares_by_end(facts):
     return {p["end"]: p["val"] for p in by_year.values()}
 
 
-def _latest_shares(facts):
-    points = _shares_points(facts)
-    if not points:
+def _latest_weighted_shares(facts):
+    """Weighted-average shares from the latest 10-K (the EPS denominator).
+
+    Reported EPS is net income divided by this figure, so it is the
+    consistent choice for P/E — and unlike the cover-page figure it is
+    reported by virtually every filer, every year.
+    """
+    from datetime import date
+    pts = _annual_concept(facts, ["WeightedAverageNumberOfSharesOutstandingBasic"], flow=False)
+    if not pts:
         return None
-    return max(points, key=lambda p: p["end"])["val"]
+    latest = pts[-1]
+    if (date.today() - date.fromisoformat(latest["end"][:10])).days > 730:
+        return None
+    return latest["val"]
+
+
+def _latest_shares(facts):
+    """Most recent shares outstanding — but only a CURRENT count.
+
+    The cover-page figure (dei) goes stale for many filers — Visa's stops
+    in 2010, Nike's in 2015, Berkshire's in 2011 — and a share count years
+    out of date mixed with today's price produces a nonsense market cap
+    and P/E (Berkshire showed P/E 0.007, Fox $2B of EPS). So: a cover-page
+    count older than two years is ignored, and the weighted-average shares
+    from the latest 10-K are used instead. If neither is current, the
+    share-derived figures render as a dash instead of a wrong number.
+    """
+    from datetime import date
+    today = date.today()
+    points = [p for p in _shares_points(facts)
+              if (today - date.fromisoformat(p["end"][:10])).days <= 730]
+    if points:
+        return max(points, key=lambda p: p["end"])["val"]
+    return _latest_weighted_shares(facts)
 
 
 def _debt_by_end(facts):
@@ -311,7 +533,7 @@ def metrics(symbol, price=None):
         price = live_price(symbol)["price"]
     shares = _latest_shares(data)
     revenue_q = _quarterly_series(data, "Revenues", ("SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenuesNetOfInterestExpense"))
-    income_q = _quarterly_series(data, "NetIncomeLoss", ("NetIncomeLossAvailableToCommonStockholdersBasic",))
+    income_q = _quarterly_series(data, "NetIncomeLoss", ("ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"), prefer="NetIncomeLossAvailableToCommonStockholdersBasic")
     ebit_q = _quarterly_series(data, "OperatingIncomeLoss")
     equity = _year_map(_annual_concept(data, ["StockholdersEquity"], flow=False))
     debt = _year_map(_annual_concept(data, ["Debt"], flow=False) or []) or {int(k[:4]): v for k, v in _debt_by_end(data).items()}
@@ -325,12 +547,31 @@ def metrics(symbol, price=None):
     prior_ttm_revenue = _ttm(revenue_q[:-4]) if len(revenue_q) >= 8 else None
 
     eps_ttm = (ttm_income / shares) if ttm_income and shares else None
+    pe = (price / eps_ttm) if price and eps_ttm and eps_ttm > 0 else None
+    if pe is not None and pe < 0.1:
+        # A P/E under 0.1 means the share count and the price do not belong
+        # to the same share class (see _latest_shares): the share-derived
+        # figures are not credible, so they render as unknown rather than
+        # as a nonsense number.
+        return {
+            "symbol": symbol.upper(),
+            "name": company_name(symbol),
+            "price": price,
+            "cap": None,
+            "pe": None,
+            "eps_ttm": None,
+            "roe": (ttm_income / latest_equity) if ttm_income and latest_equity else None,
+            "roce": (ttm_ebit / (latest_equity + latest_debt)) if ttm_ebit and latest_equity and latest_debt is not None else None,
+            "growth": ((ttm_revenue / prior_ttm_revenue) - 1) if ttm_revenue and prior_ttm_revenue else None,
+            "debt_equity": (latest_debt / latest_equity) if latest_debt is not None and latest_equity else None,
+            "book_value_per_share": None,
+        }
     return {
         "symbol": symbol.upper(),
         "name": company_name(symbol),
         "price": price,
         "cap": (price * shares) if price and shares else None,
-        "pe": (price / eps_ttm) if price and eps_ttm and eps_ttm > 0 else None,
+        "pe": pe,
         "eps_ttm": eps_ttm,
         "roe": (ttm_income / latest_equity) if ttm_income and latest_equity else None,
         "roce": (ttm_ebit / (latest_equity + latest_debt)) if ttm_ebit and latest_equity and latest_debt is not None else None,
@@ -344,13 +585,13 @@ def statements(symbol):
     """Ten years of annuals, twelve quarters, and ten years of ratios."""
     data = facts(symbol)
 
-    def annual(concepts, flow=True):
-        return _year_map(_annual_concept(data, concepts, flow=flow))
+    def annual(concepts, flow=True, prefer=None):
+        return _year_map(_annual_concept(data, concepts, flow=flow, prefer=prefer))
 
     revenue = annual(["Revenues", "SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenuesNetOfInterestExpense"])
     cogs = annual(["CostOfRevenue", "CostOfGoodsAndServicesSold"])
     op_income = annual(["OperatingIncomeLoss"])
-    net_income = annual(["NetIncomeLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"])
+    net_income = annual(["NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"], prefer="NetIncomeLossAvailableToCommonStockholdersBasic")
     assets = annual(["Assets"], flow=False)
     equity = annual(["StockholdersEquity"], flow=False)
     debt = {int(k[:4]): v for k, v in _debt_by_end(data).items()}
@@ -406,7 +647,7 @@ def statements(symbol):
     quarters = []
     rev_q = _quarterly_series(data, "Revenues", ("SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenuesNetOfInterestExpense"))
     op_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "OperatingIncomeLoss")}
-    ni_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "NetIncomeLoss", ("NetIncomeLossAvailableToCommonStockholdersBasic",))}
+    ni_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "NetIncomeLoss", ("ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"), prefer="NetIncomeLossAvailableToCommonStockholdersBasic")}
     latest_shares = _latest_shares(data)
     for p in rev_q[-12:]:
         ni = ni_q.get((p["fy"], p["fp"]))

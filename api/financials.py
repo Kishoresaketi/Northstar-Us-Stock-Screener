@@ -19,7 +19,7 @@ import lib.edgar as edgar
 
 def get_financials(symbol):
     symbol = symbol.upper()
-    peer_symbols = edgar.PEERS.get(symbol, [])
+    peer_symbols = edgar.peers_for(symbol)
     # Warm the EDGAR + price caches for the company and its peers in parallel,
     # so the wall time is one slow fetch, not the sum of them.
     loaded = {}
@@ -59,9 +59,12 @@ def get_financials(symbol):
         except Exception:
             pass
     peers.sort(key=lambda p: p.get("cap") or 0, reverse=True)
+    pc = edgar.pros_cons(metrics, stmts["annual"], stmts["ratios"], peers)
+    entry = edgar.universe_entry(symbol)
     return {
         "symbol": symbol,
         "name": edgar.company_name(symbol),
+        "sector": entry["sector"] if entry else None,
         "price": price["price"],
         "changePercent": price["changePercent"],
         "metrics": metrics,
@@ -69,6 +72,8 @@ def get_financials(symbol):
         "quarterly": stmts["quarterly"],
         "ratios": stmts["ratios"],
         "peers": peers,
+        "pros": pc["pros"],
+        "cons": pc["cons"],
         "asOf": int(time.time()),
         "source": "SEC EDGAR company facts + Yahoo Finance price",
     }
