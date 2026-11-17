@@ -28,12 +28,89 @@ function fmtNum(value, digits = 2) { return value == null ? '—' : Number(value
 function fmtDollars(value) { return value == null ? '—' : `$${Number(value).toFixed(2)}`; }
 function fmtDays(value) { return value == null ? '—' : Number(value).toFixed(1); }
 
+// Shareholding (13F institutional ownership) lives in one quarterly file,
+// data/shareholding.json, read directly so both the static Pages build and
+// the live Vercel build use it. Insiders % is not in 13F filings and no
+// free source supplies it, so insiders render as "—" and the public
+// figure is the remainder, labelled as including insiders.
+let shareholdingData = null;
+let shareholdingLoaded = false;
+async function loadShareholding(symbol) {
+  const note = document.querySelector('#shareholdingNote');
+  try {
+    if (!shareholdingLoaded) {
+      const response = await fetch('data/shareholding.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error('shareholding unavailable');
+      shareholdingData = await response.json();
+      shareholdingLoaded = true;
+    }
+    const entry = shareholdingData.entries && shareholdingData.entries[symbol];
+    if (!entry || entry.institutions_pct == null) {
+      emptyTable('shareholdingTable', ['Holder', 'Share'], 'No institutional holdings reported for this company in the latest 13F quarter.');
+      return;
+    }
+    if (note && shareholdingData.label) note.textContent = `Who holds the shares, from SEC Form 13F filings — ${shareholdingData.label}. ${(entry.filers || 0).toLocaleString('en-US')} managers reported ${fmtPct(entry.institutions_pct)} of shares outstanding. Insiders are not in 13F filings, so the public figure includes them.`;
+    table('shareholdingTable', ['Holder', 'Share'],
+      [['Institutions', fmtPct(entry.institutions_pct)],
+       ['Insiders', '—'],
+       ['Public (includes insiders)', fmtPct(1 - entry.institutions_pct)]]);
+  } catch (error) {
+    emptyTable('shareholdingTable', ['Holder', 'Share'], 'Shareholding data is still being built — check back soon.');
+  }
+}
+// Data notes: per-company exceptions in the SEC figures, shown directly
+// below the tab bar. Only renders when something is actually off, so
+// clean companies get no block at all.
+function renderDataNotes(data) {
+  const box = document.querySelector('#dataNotes');
+  const list = document.querySelector('#dataNotesList');
+  if (!box || !list) return;
+  const notes = [];
+  const m = data.metrics || {};
+  const annual = data.annual || [];
+  const quarterly = data.quarterly || [];
+  if (!annual.length) {
+    notes.push('No 10-K annual history is available for this company, so the ten-year Profit &amp; loss, Balance sheet, Cash flow and Ratios tables are empty.');
+  }
+  const opMissingAnnual = annual.length && annual.every(r => r.operating_income == null);
+  const opMissingQuarterly = quarterly.length && quarterly.every(q => q.operating_income == null);
+  if (opMissingAnnual || opMissingQuarterly) {
+    notes.push('Operating income is not reported by this company in its SEC filings. The Operating income rows, and the operating-margin and return-on-capital ratios that depend on it, show —.');
+  }
+  const negRev = quarterly.filter(q => q.revenue != null && q.revenue < 0);
+  if (negRev.length) {
+    const shown = negRev.map(q => `${q.label}: ${fmtMillions(q.revenue)}M`).join(', ');
+    notes.push(`Quarterly revenue shows a negative figure (${shown}). Revenue can't be negative — the fourth quarter is calculated as the full year minus the first three quarters, and the yearly and quarterly figures can come from different restated versions of this company's filings after a spin-off, merger or divestiture.`);
+  }
+  if (annual.length) {
+    const missing = [];
+    if (annual.every(r => r.cfo == null)) missing.push('operating cash flow');
+    if (annual.every(r => r.capex == null)) missing.push('capital expenditure');
+    if (annual.every(r => r.fcf == null)) missing.push('free cash flow');
+    if (missing.length) {
+      notes.push(`Cash flow: ${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} not reported under the labels this screener reads, so the row shows —.`);
+    }
+    if (negRev.length) {
+      const negCfoYears = annual.filter(r => r.cfo != null && r.cfo < 0).map(r => `FY${r.fy}`);
+      if (negCfoYears.length) {
+        notes.push(`Operating cash flow is also negative in ${negCfoYears.join(', ')}. Those years come from the company's latest restated filings.`);
+      }
+    }
+  }
+  if (m.cap == null) {
+    notes.push("Market cap is blank because the share count isn't reported in this company's filings.");
+  }
+  list.innerHTML = notes.map(n => `<li>${n}</li>`).join('');
+  box.hidden = !notes.length;
+  if (notes.length) lucide.createIcons();
+}
 function renderFinancials(data) {
   const m = data.metrics || {};
   const annual = data.annual || [];
   const quarterly = data.quarterly || [];
   const ratios = data.ratios || [];
   const peers = data.peers || [];
+  renderDataNotes(data);
 
   table('comparisonTable', ['Company', 'Market cap', 'P/E', 'ROE', 'Revenue growth', 'Debt / equity'],
     [[data.name || data.symbol, fmtCap(m.cap), fmtNum(m.pe, 1), fmtPct(m.roe), fmtSignedPct(m.growth), fmtNum(m.debt_equity)],
@@ -92,6 +169,7 @@ function renderFinancials(data) {
     emptyTable('cashflowTable', ['Metric'], note);
     emptyTable('ratiosTable', ['Ratio'], note);
   }
+  loadShareholding(data.symbol);
 }
 
 function renderSnapshot(profile, data) {
@@ -123,7 +201,9 @@ function renderSnapshot(profile, data) {
   lucide.createIcons();
 }
 function renderFinancialsUnavailable(message) {
-  ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable'].forEach(id => {
+  const notesBox = document.querySelector('#dataNotes');
+  if (notesBox) { notesBox.hidden = true; const notesList = document.querySelector('#dataNotesList'); if (notesList) notesList.innerHTML = ''; }
+  ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable', 'shareholdingTable'].forEach(id => {
     const el = document.querySelector(`#${id}`);
     if (el) el.innerHTML = `<tbody><tr><td>${message}</td></tr></tbody>`;
   });
