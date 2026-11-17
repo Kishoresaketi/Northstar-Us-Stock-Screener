@@ -74,6 +74,17 @@ NDX_ONLY_OVERRIDES = {
     "TRI": ("Industrials", "Professional Services"),
 }
 
+# S&P 500 entries the upstream CSV mislabels (verified Nov 16, 2026 — the
+# live constituents.csv still lists DD as Industrials). Applied on every
+# re-fetch so the error cannot come back.
+SP500_OVERRIDES = {
+    # DuPont is a chemicals company (Materials / Specialty Chemicals), not
+    # an industrial conglomerate — without this, its peers come out as
+    # 3M, Honeywell, Caterpillar and the like instead of Sherwin-Williams,
+    # Ecolab, PPG, Linde and Dow.
+    "DD": ("Materials", "Specialty Chemicals"),
+}
+
 
 def fetch_sp500():
     req = urllib.request.Request(SP500_URL, headers=UA)
@@ -171,6 +182,11 @@ def main():
     for symbol, (sector, subindustry) in NDX_ONLY_OVERRIDES.items():
         entry = universe.get(symbol)
         if entry and entry["indices"] == ["NDX"]:
+            entry["sector"] = sector
+            entry["subindustry"] = subindustry
+    for symbol, (sector, subindustry) in SP500_OVERRIDES.items():
+        entry = universe.get(symbol)
+        if entry:
             entry["sector"] = sector
             entry["subindustry"] = subindustry
     with open(os.path.join(HERE, "universe.json"), "w", encoding="utf-8") as fh:
