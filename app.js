@@ -1,30 +1,99 @@
-const stocks = [
-  { ticker: 'AAPL', name: 'Apple Inc.', sector: 'technology', price: '$221.27', change: '+1.14%', cap: '$3.39T', pe: '34.2', roe: '147.9%', growth: '2.6%', icon: 'A' },
-  { ticker: 'MSFT', name: 'Microsoft Corp.', sector: 'technology', price: '$446.34', change: '+0.75%', cap: '$3.32T', pe: '36.7', roe: '35.1%', growth: '16.4%', icon: 'M' },
-  { ticker: 'NVDA', name: 'NVIDIA Corp.', sector: 'technology', price: '$128.28', change: '+3.54%', cap: '$3.15T', pe: '73.1', roe: '91.5%', growth: '122.4%', icon: 'N' },
-  { ticker: 'GOOGL', name: 'Alphabet Inc.', sector: 'technology', price: '$162.78', change: '-0.19%', cap: '$2.01T', pe: '24.8', roe: '30.8%', growth: '15.4%', icon: 'G' },
-  { ticker: 'LLY', name: 'Eli Lilly & Co.', sector: 'healthcare', price: '$905.16', change: '+1.85%', cap: '$860.2B', pe: '111.3', roe: '61.7%', growth: '35.9%', icon: 'L' },
-  { ticker: 'JPM', name: 'JPMorgan Chase', sector: 'financials', price: '$221.88', change: '-0.54%', cap: '$624.4B', pe: '12.2', roe: '17.6%', growth: '21.8%', icon: 'J' },
-  { ticker: 'XOM', name: 'Exxon Mobil Corp.', sector: 'energy', price: '$114.73', change: '+0.37%', cap: '$452.9B', pe: '14.3', roe: '15.2%', growth: '-5.4%', icon: 'X' }
-];
+// The screener list is the full S&P 500 + Nasdaq-100 universe (517
+// companies), loaded from the pre-built search index — the same file the
+// search box uses. It is a static snapshot (names/sectors change rarely);
+// prices and fundamentals are fetched live per page, below.
+let stocks = [];
+let stocksLoaded = false;
+const PAGE_SIZE = 15;
+let currentPage = 1;
 const tbody = document.querySelector('#stockRows');
 let activeSector = 'all';
 let favorites = new Set();
+
+function sectorSlug(gics) {
+  const map = {
+    'Information Technology': 'technology', 'Health Care': 'healthcare',
+    'Financials': 'financials', 'Energy': 'energy', 'Industrials': 'industrials',
+    'Consumer Discretionary': 'consumer-discretionary',
+    'Consumer Staples': 'consumer-staples', 'Materials': 'materials',
+    'Utilities': 'utilities', 'Real Estate': 'real-estate',
+    'Communication Services': 'communication-services',
+  };
+  return map[gics] || (gics || 'all').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+async function loadUniverse() {
+  try {
+    const response = await fetch('data/search-index.json', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Universe list unavailable: ${response.status}`);
+    const index = await response.json();
+    stocks = index.map(entry => ({
+      ticker: entry.symbol, name: entry.name, sector: sectorSlug(entry.sector),
+      icon: entry.symbol[0], price: '—', change: '—', cap: '—', pe: '—', roe: '—', growth: '—',
+    }));
+    stocksLoaded = true;
+    currentPage = 1;
+    renderRows();
+    loadPageData();
+  } catch (error) {
+    document.querySelector('#resultRange').textContent = 'Could not load the company list. Search still works.';
+  }
+}
+
+function visibleStocks() {
+  return stocks.filter(s => activeSector === 'all' || s.sector === activeSector);
+}
+
+function currentPageStocks() {
+  const visible = visibleStocks();
+  const start = (currentPage - 1) * PAGE_SIZE;
+  return visible.slice(start, start + PAGE_SIZE);
+}
+
+function pageLabels(totalPages) {
+  // Compact pager: first pages, current neighbourhood, last page.
+  const pages = new Set([1, 2, 3, totalPages, currentPage - 1, currentPage, currentPage + 1]);
+  const sorted = [...pages].filter(p => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+  const labels = [];
+  sorted.forEach((p, i) => {
+    if (i && p - sorted[i - 1] > 1) labels.push('…');
+    labels.push(p);
+  });
+  return labels;
+}
+
+function renderPager(totalPages) {
+  const pager = document.querySelector('.pager');
+  if (!pager) return;
+  pager.style.display = totalPages > 1 ? '' : 'none';
+  if (totalPages <= 1) { pager.innerHTML = ''; return; }
+  const buttons = pageLabels(totalPages).map(label =>
+    label === '…'
+      ? '<span>…</span>'
+      : `<button data-page="${label}"${label === currentPage ? ' class="page-current"' : ''}>${label}</button>`).join('');
+  pager.innerHTML = `<button data-page="prev" ${currentPage <= 1 ? 'disabled' : ''} aria-label="Previous page"><i data-lucide="chevron-left"></i></button>${buttons}<button data-page="next" ${currentPage >= totalPages ? 'disabled' : ''} aria-label="Next page"><i data-lucide="chevron-right"></i></button>`;
+}
+
 function renderRows() {
-  const visible = stocks.filter(s => activeSector === 'all' || s.sector === activeSector);
-  tbody.innerHTML = visible.map((s, index) => `<tr><td><button class="star ${favorites.has(s.ticker) ? 'active' : ''}" data-star="${s.ticker}" aria-label="Save ${s.ticker}"><i data-lucide="star"></i></button></td><td><button class="company-cell row-button" data-stock="${s.ticker}"><span class="company-icon">${s.icon}</span><span><span class="company-name">${s.name}</span><span class="company-ticker">${s.ticker}</span></span></button></td><td>${s.price}</td><td class="${s.change.startsWith('-') ? 'negative' : 'positive'}">${s.change}</td><td>${s.cap}</td><td>${s.pe}</td><td>${s.roe}</td><td class="${s.growth.startsWith('-') ? 'negative' : 'growth'}">${s.growth}</td><td><button class="row-button" data-stock="${s.ticker}" aria-label="View ${s.name}"><i data-lucide="chevron-right"></i></button></td></tr>`).join('');
+  const visible = visibleStocks();
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const page = visible.slice(start, start + PAGE_SIZE);
+  tbody.innerHTML = page.map((s, index) => `<tr><td><button class="star ${favorites.has(s.ticker) ? 'active' : ''}" data-star="${s.ticker}" aria-label="Save ${s.ticker}"><i data-lucide="star"></i></button></td><td><button class="company-cell row-button" data-stock="${s.ticker}"><span class="company-icon">${s.icon}</span><span><span class="company-name">${s.name}</span><span class="company-ticker">${s.ticker}</span></span></button></td><td>${s.price}</td><td class="${s.change.startsWith('-') ? 'negative' : 'positive'}">${s.change}</td><td>${s.cap}</td><td>${s.pe}</td><td>${s.roe}</td><td class="${s.growth.startsWith('-') ? 'negative' : 'growth'}">${s.growth}</td><td><button class="row-button" data-stock="${s.ticker}" aria-label="View ${s.name}"><i data-lucide="chevron-right"></i></button></td></tr>`).join('');
   document.querySelector('#resultCount').textContent = String(visible.length);
   const range = document.querySelector('#resultRange');
-  if (range) range.textContent = visible.length ? `Showing 1–${visible.length} of ${visible.length} results` : 'No companies match these filters';
-  const pager = document.querySelector('.pager');
-  if (pager) pager.style.display = visible.length > 7 ? '' : 'none';
+  if (range) range.textContent = !stocksLoaded ? 'Loading companies…' : visible.length ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, visible.length)} of ${visible.length} results` : 'No companies match these filters';
+  renderPager(totalPages);
   lucide.createIcons();
 }
 async function refreshQuotes() {
+  const page = currentPageStocks();
+  if (!page.length) return;
   const refreshTime = document.querySelector('#refreshTime');
   const marketStatus = document.querySelector('#marketStatus');
   try {
-    const { quotes, updatedAt } = await NorthstarAPI.quotes(stocks.map(stock => stock.ticker));
+    const { quotes, updatedAt } = await NorthstarAPI.quotes(page.map(stock => stock.ticker));
     quotes.forEach(quote => {
       const stock = stocks.find(item => item.ticker === quote.symbol);
       if (!stock) return;
@@ -43,7 +112,18 @@ function openDrawer(ticker) {
   const s = stocks.find(stock => stock.ticker === ticker); if (!s) return;
   detailName.textContent = s.name; detailTicker.textContent = `${s.ticker} · ${s.sector[0].toUpperCase() + s.sector.slice(1)}`; detailInitial.textContent = s.icon; detailPrice.textContent = s.price; detailChange.textContent = s.change; detailChange.className = s.change.startsWith('-') ? 'negative' : 'positive'; detailCap.textContent = s.cap; detailPE.textContent = s.pe; detailROE.textContent = s.roe; detailGrowth.textContent = s.growth; detailDrawer.classList.add('open'); scrim.classList.add('open'); detailDrawer.setAttribute('aria-hidden','false');
 }
-document.querySelector('#quickFilters').addEventListener('click', e => { const button = e.target.closest('[data-filter]'); if (!button) return; activeSector = button.dataset.filter; document.querySelectorAll('.chip').forEach(c => c.classList.toggle('selected', c === button)); renderRows(); });
+document.querySelector('#quickFilters').addEventListener('click', e => { const button = e.target.closest('[data-filter]'); if (!button) return; activeSector = button.dataset.filter; currentPage = 1; document.querySelectorAll('.chip').forEach(c => c.classList.toggle('selected', c === button)); renderRows(); loadPageData(); });
+document.querySelector('.pager').addEventListener('click', e => {
+  const button = e.target.closest('[data-page]');
+  if (!button || button.disabled) return;
+  const target = button.dataset.page;
+  const totalPages = Math.max(1, Math.ceil(visibleStocks().length / PAGE_SIZE));
+  if (target === 'prev') currentPage = Math.max(1, currentPage - 1);
+  else if (target === 'next') currentPage = Math.min(totalPages, currentPage + 1);
+  else currentPage = Math.min(totalPages, Math.max(1, parseInt(target, 10) || 1));
+  renderRows();
+  loadPageData();
+});
 tbody.addEventListener('click', e => { const star = e.target.closest('[data-star]'); if (star) { const t = star.dataset.star; favorites.has(t) ? favorites.delete(t) : favorites.add(t); renderRows(); return; } const row = e.target.closest('[data-stock]'); if (row) window.openProfile?.(row.dataset.stock); });
 document.querySelector('#closeDrawer').addEventListener('click', closeDrawer); scrim.addEventListener('click', closeDrawer); function closeDrawer(){detailDrawer.classList.remove('open');scrim.classList.remove('open');detailDrawer.setAttribute('aria-hidden','true')}
 document.querySelectorAll('.filter-toggle').forEach(button => button.addEventListener('click', () => { const content = button.nextElementSibling; if (!content || !content.classList.contains('filter-content')) return; const open = button.getAttribute('aria-expanded') === 'true'; button.setAttribute('aria-expanded', !open); content.hidden = open; button.querySelector('svg')?.setAttribute('data-lucide', open ? 'chevron-down' : 'chevron-up'); lucide.createIcons(); }));
@@ -89,13 +169,18 @@ async function openSearchedTicker(ticker, fallbackName) {
   searchMessage.textContent = `Looking up ${ticker}...`;
   try {
     const quote = (await NorthstarAPI.quotes([ticker])).quotes[0];
-    const existing = stocks.find(stock => stock.ticker === ticker);
-    const entry = existing || { ticker, name: fallbackName || ticker, sector: 'all', cap: '—', pe: '—', roe: '—', growth: '—', icon: ticker.slice(0, 1) };
-    entry.price = `$${Number(quote.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    entry.change = `${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%`;
-    if (!existing) stocks.unshift(entry);
-    activeSector = 'all';
-    document.querySelectorAll('.chip').forEach(chip => chip.classList.toggle('selected', chip.dataset.filter === 'all'));
+    const index = stocks.findIndex(stock => stock.ticker === ticker);
+    if (index >= 0) {
+      // In the universe: jump the table to the page holding this ticker.
+      activeSector = 'all';
+      document.querySelectorAll('.chip').forEach(chip => chip.classList.toggle('selected', chip.dataset.filter === 'all'));
+      currentPage = Math.floor(index / PAGE_SIZE) + 1;
+      const entry = stocks[index];
+      entry.price = `$${Number(quote.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      entry.change = `${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%`;
+    }
+    // Outside the universe (live mode only): the profile still opens from
+    // the API; the ticker is not added to the universe table.
     renderRows(); window.openProfile?.(ticker); stockSearch.hidden = true; searchResults.hidden = true; searchInput.value = '';
     searchMessage.textContent = 'Search any company in the S&P 500 or Nasdaq-100, or enter a US ticker.';
   } catch (error) {
@@ -137,9 +222,11 @@ async function refreshStrip() {
 }
 function fmtCap(value) { if (value == null) return '—'; if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`; if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`; return `$${(value / 1e6).toFixed(0)}M`; }
 async function refreshFundamentals() {
+  const page = currentPageStocks();
+  if (!page.length) return;
   try {
-    const { fundamentals } = await NorthstarAPI.fundamentals(stocks.map(stock => stock.ticker));
-    stocks.forEach(stock => {
+    const { fundamentals } = await NorthstarAPI.fundamentals(page.map(stock => stock.ticker));
+    page.forEach(stock => {
       const f = fundamentals[stock.ticker];
       if (!f) return;
       stock.cap = fmtCap(f.cap);
@@ -152,6 +239,11 @@ async function refreshFundamentals() {
     /* keep the seeded values when the fundamentals feed is down */
   }
 }
+function loadPageData() {
+  // Quotes + fundamentals for the visible page only — never all 517 at once.
+  refreshQuotes();
+  refreshFundamentals();
+}
 renderRows(); lucide.createIcons();
-refreshQuotes(); refreshStrip(); refreshFundamentals();
+loadUniverse(); refreshStrip();
 setInterval(() => { refreshQuotes(); refreshStrip(); refreshFundamentals(); }, 60000);
