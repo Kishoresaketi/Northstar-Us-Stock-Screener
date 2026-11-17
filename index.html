@@ -56,17 +56,15 @@
         <aside class="filters-panel">
           <div class="panel-title"><span>Filters</span><button id="resetFilters">Reset all</button></div>
           <div class="filter-search"><i data-lucide="search"></i><input id="filterSearch" placeholder="Search filters" /></div>
-          <div class="active-filter-list">
-            <button class="active-filter">Market cap: Large <i data-lucide="x"></i></button>
-            <button class="active-filter">ROE: &gt; 15% <i data-lucide="x"></i></button>
+          <div class="active-filter-list" id="activeFilterList">
           </div>
           <div class="filter-group">
             <button class="filter-toggle" aria-expanded="true">Fundamentals <i data-lucide="chevron-up"></i></button>
             <div class="filter-content">
-              <label>Market cap <select id="marketCap"><option value="all">Any size</option><option value="large" selected>Large cap</option><option value="mid">Mid cap</option></select></label>
+              <label>Market cap <select id="marketCap"><option value="all" selected>Any size</option><option value="large">Large cap</option><option value="mid">Mid cap</option></select></label>
               <label>Price / earnings <div class="range-fields"><input placeholder="Min" inputmode="decimal" /><span>to</span><input placeholder="Max" inputmode="decimal" /></div></label>
-              <label>Return on equity <select id="roe"><option value="all">Any</option><option value="15" selected>Over 15%</option><option value="25">Over 25%</option></select></label>
-              <label>Revenue growth <select><option>Any</option><option>Over 10%</option><option>Over 20%</option></select></label>
+              <label>Return on equity <select id="roe"><option value="all" selected>Any</option><option value="15">Over 15%</option><option value="25">Over 25%</option></select></label>
+              <label>Revenue growth <select id="growth"><option value="any" selected>Any</option><option value="10">Over 10%</option><option value="20">Over 20%</option></select></label>
             </div>
           </div>
           <div class="filter-group compact"><button class="filter-toggle">Technical indicators <i data-lucide="chevron-down"></i></button></div>
@@ -78,14 +76,14 @@
         <section class="results-panel">
             <div class="results-header">
             <div><p class="results-label">SCREEN RESULTS</p><h2><span id="resultCount">247</span> companies</h2></div>
-            <div class="results-tools"><button class="icon-button outlined" title="Configure columns"><i data-lucide="columns-3"></i></button><button class="button button-quiet">Sort: <b>Market cap</b> <i data-lucide="chevron-down"></i></button></div>
+            <div class="results-tools"><button class="icon-button outlined" title="Configure columns"><i data-lucide="columns-3"></i></button><label class="sort-control">Sort: <select id="sortSelect"><option value="cap-desc" selected>Market cap ↓</option><option value="cap-asc">Market cap ↑</option><option value="pe-desc">P/E ↓</option><option value="pe-asc">P/E ↑</option><option value="roe-desc">ROE ↓</option><option value="roe-asc">ROE ↑</option><option value="growth-desc">Revenue growth ↓</option><option value="growth-asc">Revenue growth ↑</option><option value="price-desc">Price ↓</option><option value="price-asc">Price ↑</option><option value="change-desc">1D change ↓</option><option value="change-asc">1D change ↑</option></select></label></div>
           </div>
             <div class="quick-filters" id="quickFilters">
             <button class="chip selected" data-filter="all">All stocks</button><button class="chip" data-filter="technology">Technology</button><button class="chip" data-filter="healthcare">Healthcare</button><button class="chip" data-filter="financials">Financials</button><button class="chip" data-filter="energy">Energy</button>
             </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th></th><th>Company</th><th>Price</th><th>1D <i data-lucide="arrow-down"></i></th><th>Market cap</th><th>P/E</th><th>ROE</th><th>Revenue growth</th><th></th></tr></thead>
+              <thead><tr><th></th><th>Company</th><th data-sort="price">Price <span class="sort-ind"></span></th><th data-sort="change">1D <span class="sort-ind"></span></th><th data-sort="cap">Market cap <span class="sort-ind"></span></th><th data-sort="pe">P/E <span class="sort-ind"></span></th><th data-sort="roe">ROE <span class="sort-ind"></span></th><th data-sort="growth">Revenue growth <span class="sort-ind"></span></th><th></th></tr></thead>
               <tbody id="stockRows"></tbody>
             </table>
           </div>

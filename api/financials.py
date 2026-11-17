@@ -16,12 +16,52 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import lib.edgar as edgar
 
+# How many peers get a full live metric fetch. The peer map is cap-sorted,
+# so the top 7 are the largest, most relevant peers — and 7 still satisfies
+# the "at least seven peers" requirement. Fetching live EDGAR facts +
+# metrics for all 10-12 peers pushed the handler past Vercel's 10-second
+# function limit (503s); the rest of the peers use their pre-built static
+# metrics (same shape, build-time values) instead of a live fetch.
+LIVE_PEER_COUNT = 7
+
+
+def _static_financials(symbol):
+    """The pre-built data/financials/{symbol}.json for this ticker, if the
+    static build has one. Same shape as this endpoint's response."""
+    safe = "".join(c if c.isalnum() or c == "." else "_" for c in symbol)
+    path = os.path.join(os.path.dirname(__file__), "..", "data", "financials", safe + ".json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
 
 def get_financials(symbol):
     symbol = symbol.upper()
+    try:
+        return _get_financials_live(symbol)
+    except ValueError:
+        # Unknown ticker (no SEC filings): no static file can save it.
+        raise
+    except Exception:
+        # Transient EDGAR/Yahoo outage or a slow fetch: serve the pre-built
+        # static file (same shape) instead of a 503. The profile's 60-second
+        # quote refresh corrects the build-time price.
+        static = _static_financials(symbol)
+        if static is None:
+            raise
+        static["source"] = "Static build (live source unavailable) — SEC EDGAR company facts + Yahoo Finance price"
+        return static
+
+
+def _get_financials_live(symbol):
     peer_symbols = edgar.peers_for(symbol)
-    # Warm the EDGAR + price caches for the company and its peers in parallel,
-    # so the wall time is one slow fetch, not the sum of them.
+    live_peers = peer_symbols[:LIVE_PEER_COUNT]
+    # Warm the EDGAR + price caches for the company and its top peers in
+    # parallel, so the wall time is one slow fetch, not the sum of them.
+    # Peers beyond the live cap do not get warmed: their metrics come from
+    # their pre-built static files.
     loaded = {}
 
     def _warm(sym, kind):
@@ -32,7 +72,7 @@ def get_financials(symbol):
 
     with ThreadPoolExecutor(max_workers=6) as executor:
         jobs = [executor.submit(_warm, sym, kind)
-                for sym in [symbol, *peer_symbols] for kind in ("facts", "price")]
+                for sym in [symbol, *live_peers] for kind in ("facts", "price")]
         for job in as_completed(jobs):
             pass
     price = loaded.get((symbol, "price"))
@@ -44,20 +84,26 @@ def get_financials(symbol):
             # an unknown ticker (404), not a transient outage (503).
             edgar.facts(symbol)
             raise
-    metrics = edgar.metrics(symbol, price["price"])
+    # Main metrics + statements and the top peers' metrics in parallel.
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        main_future = executor.submit(lambda: (edgar.metrics(symbol, price["price"]), edgar.statements(symbol)))
+        peer_futures = {peer: executor.submit(_peer_metrics_live, peer, loaded) for peer in live_peers}
+        metrics, stmts = main_future.result()
+        peer_metrics = {}
+        for peer, future in peer_futures.items():
+            result = future.result()
+            if result is not None:
+                peer_metrics[peer] = result
     metrics["changePercent"] = price["changePercent"]
-    stmts = edgar.statements(symbol)
     peers = []
     for peer in peer_symbols:
-        peer_price = loaded.get((peer, "price"))
-        if not peer_price or not peer_price.get("price"):
+        if peer in peer_metrics:
+            peers.append(peer_metrics[peer])
             continue
-        try:
-            peer_metrics = edgar.metrics(peer, peer_price["price"])
-            peer_metrics["changePercent"] = peer_price["changePercent"]
-            peers.append(peer_metrics)
-        except Exception:
-            pass
+        # Beyond the live cap: pre-built static metrics, same shape.
+        static = _static_financials(peer)
+        if static and static.get("metrics"):
+            peers.append(static["metrics"])
     peers.sort(key=lambda p: p.get("cap") or 0, reverse=True)
     pc = edgar.pros_cons(metrics, stmts["annual"], stmts["ratios"], peers)
     entry = edgar.universe_entry(symbol)
@@ -77,6 +123,18 @@ def get_financials(symbol):
         "asOf": int(time.time()),
         "source": "SEC EDGAR company facts + Yahoo Finance price",
     }
+
+
+def _peer_metrics_live(peer, loaded):
+    peer_price = loaded.get((peer, "price"))
+    if not peer_price or not peer_price.get("price"):
+        return None
+    try:
+        peer_metrics = edgar.metrics(peer, peer_price["price"])
+        peer_metrics["changePercent"] = peer_price["changePercent"]
+        return peer_metrics
+    except Exception:
+        return None
 
 
 class handler(BaseHTTPRequestHandler):

@@ -92,6 +92,33 @@ def build_search_index(tickers):
     write(os.path.join(DATA, "search-index.json"), index)
 
 
+def build_fundamentals_summary(tickers):
+    """One compact JSON with the numbers the screener table filters and
+    sorts on (market cap, P/E, ROE, growth, price, daily change) for the
+    whole universe. The table only fetches live data for its visible page,
+    so filtering/sorting across all 517 rows needs this summary instead of
+    517 separate requests. Built from the already-built quote + fundamentals
+    files, so it costs no extra EDGAR calls."""
+    out = {}
+    for symbol in tickers:
+        try:
+            with open(os.path.join(DATA, "fundamentals", file_for(symbol) + ".json"), encoding="utf-8") as fh:
+                f = json.load(fh)
+        except (OSError, ValueError):
+            f = {}
+        try:
+            with open(os.path.join(DATA, "quotes", file_for(symbol) + ".json"), encoding="utf-8") as fh:
+                q = json.load(fh)
+        except (OSError, ValueError):
+            q = {}
+        out[symbol] = {
+            "cap": f.get("cap"), "pe": f.get("pe"), "roe": f.get("roe"),
+            "growth": f.get("growth"), "price": q.get("price"),
+            "change": q.get("changePercent"),
+        }
+    write(os.path.join(DATA, "fundamentals-summary.json"), out)
+
+
 def build_peer_map(tickers):
     """Peer lists for every ticker, written to data/peer-map.json.
 
@@ -185,6 +212,7 @@ def main():
             print(f"retrying {len(failed)} failed quote jobs")
             done2, _ = run_jobs(failed)
             done += done2
+        build_fundamentals_summary(tickers)
         print(f"refreshed {done}/{len(jobs)} files (fast mode)")
         return 0 if done else 1
 
@@ -207,6 +235,7 @@ def main():
             print(f"still failing after retry: {len(failed2)}")
             for fn, fn_args in failed2[:20]:
                 print(f"  {fn.__name__} {fn_args}")
+    build_fundamentals_summary(tickers)
     print(f"refreshed {done}/{len(jobs)} files (full mode)")
     return 0 if done else 1
 

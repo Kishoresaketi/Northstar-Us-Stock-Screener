@@ -22,6 +22,101 @@ function sectorSlug(gics) {
   return map[gics] || (gics || 'all').toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
+// Numeric fundamentals for the whole universe, from the pre-built summary
+// (data/fundamentals-summary.json, rebuilt with the static data). Filtering
+// and sorting need numbers for all 517 rows, and the per-page live fetch
+// only covers 15 — so the summary is the source for filter/sort, and the
+// live refresh overwrites the visible page's values as it arrives.
+let summaryLoaded = false;
+async function loadSummary() {
+  try {
+    const response = await fetch('data/fundamentals-summary.json', { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    stocks.forEach(stock => {
+      const v = data[stock.ticker];
+      if (!v) return;
+      stock.capNum = v.cap ?? null; stock.peNum = v.pe ?? null;
+      stock.roeNum = v.roe ?? null; stock.growthNum = v.growth ?? null;
+      stock.priceNum = v.price ?? null; stock.changeNum = v.change ?? null;
+      // Show the summary values at once; the live refresh corrects them.
+      if (stock.cap === '—') stock.cap = fmtCap(v.cap);
+      if (stock.pe === '—') stock.pe = v.pe != null ? v.pe.toFixed(1) : '—';
+      if (stock.roe === '—') stock.roe = v.roe != null ? `${(v.roe * 100).toFixed(1)}%` : '—';
+      if (stock.growth === '—') stock.growth = v.growth != null ? `${v.growth >= 0 ? '+' : ''}${(v.growth * 100).toFixed(1)}%` : '—';
+      if (stock.price === '—' && v.price != null) stock.price = `$${Number(v.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      if (stock.change === '—' && v.change != null) stock.change = `${v.change >= 0 ? '+' : ''}${v.change.toFixed(2)}%`;
+    });
+    summaryLoaded = true;
+    renderRows();
+  } catch (error) {
+    /* without the summary, filters/sort use only the loaded page's values */
+  }
+}
+
+// --- Filters & sort (operate on the full universe, numerically) ---
+const DEFAULT_SORT = 'cap-desc';
+let sortKey = 'cap';
+let sortDir = 'desc';
+const SORT_NUM = { cap: 'capNum', pe: 'peNum', roe: 'roeNum', growth: 'growthNum', price: 'priceNum', change: 'changeNum' };
+
+function activeFilters() {
+  return {
+    cap: document.querySelector('#marketCap').value,
+    roe: document.querySelector('#roe').value,
+    growth: document.querySelector('#growth').value,
+  };
+}
+
+function passesFilters(stock, filters) {
+  // A row missing the value a filter needs is excluded, never guessed.
+  if (filters.cap === 'large' && !(stock.capNum != null && stock.capNum >= 10e9)) return false;
+  if (filters.cap === 'mid' && !(stock.capNum != null && stock.capNum >= 2e9 && stock.capNum < 10e9)) return false;
+  if (filters.roe === '15' && !(stock.roeNum != null && stock.roeNum > 0.15)) return false;
+  if (filters.roe === '25' && !(stock.roeNum != null && stock.roeNum > 0.25)) return false;
+  if (filters.growth === '10' && !(stock.growthNum != null && stock.growthNum > 0.10)) return false;
+  if (filters.growth === '20' && !(stock.growthNum != null && stock.growthNum > 0.20)) return false;
+  return true;
+}
+
+function sortRows(rows) {
+  const field = SORT_NUM[sortKey];
+  const dir = sortDir === 'desc' ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const av = a[field], bv = b[field];
+    if (av == null && bv == null) return a.ticker.localeCompare(b.ticker);
+    if (av == null) return 1; // missing values always sort last
+    if (bv == null) return -1;
+    return (av - bv) * dir || a.ticker.localeCompare(b.ticker);
+  });
+}
+
+function setSort(key, dir) {
+  sortKey = key;
+  sortDir = dir || 'desc';
+  const select = document.querySelector('#sortSelect');
+  if (select) select.value = `${sortKey}-${sortDir}`;
+  document.querySelectorAll('th[data-sort]').forEach(th => {
+    const ind = th.querySelector('.sort-ind');
+    if (ind) ind.textContent = th.dataset.sort === sortKey ? (sortDir === 'desc' ? ' ↓' : ' ↑') : '';
+  });
+}
+
+function renderPills(filters) {
+  const list = document.querySelector('#activeFilterList');
+  if (!list) return;
+  const pills = [];
+  if (filters.cap === 'large') pills.push(['cap', 'Market cap: Large']);
+  if (filters.cap === 'mid') pills.push(['cap', 'Market cap: Mid']);
+  if (filters.roe === '15') pills.push(['roe', 'ROE: > 15%']);
+  if (filters.roe === '25') pills.push(['roe', 'ROE: > 25%']);
+  if (filters.growth === '10') pills.push(['growth', 'Revenue growth: > 10%']);
+  if (filters.growth === '20') pills.push(['growth', 'Revenue growth: > 20%']);
+  list.innerHTML = pills.map(([key, label]) =>
+    `<button class="active-filter" data-clear-filter="${key}">${label} <i data-lucide="x"></i></button>`).join('');
+  lucide.createIcons();
+}
+
 async function loadUniverse() {
   try {
     const response = await fetch('data/search-index.json', { cache: 'no-store' });
@@ -30,22 +125,29 @@ async function loadUniverse() {
     stocks = index.map(entry => ({
       ticker: entry.symbol, name: entry.name, sector: sectorSlug(entry.sector),
       icon: entry.symbol[0], price: '—', change: '—', cap: '—', pe: '—', roe: '—', growth: '—',
+      capNum: null, peNum: null, roeNum: null, growthNum: null, priceNum: null, changeNum: null,
     }));
     stocksLoaded = true;
     currentPage = 1;
     renderRows();
+    loadSummary();
     loadPageData();
   } catch (error) {
     document.querySelector('#resultRange').textContent = 'Could not load the company list. Search still works.';
   }
 }
 
+function filteredSortedStocks() {
+  const filters = activeFilters();
+  return sortRows(stocks.filter(s => (activeSector === 'all' || s.sector === activeSector) && passesFilters(s, filters)));
+}
+
 function visibleStocks() {
-  return stocks.filter(s => activeSector === 'all' || s.sector === activeSector);
+  return filteredSortedStocks();
 }
 
 function currentPageStocks() {
-  const visible = visibleStocks();
+  const visible = filteredSortedStocks();
   const start = (currentPage - 1) * PAGE_SIZE;
   return visible.slice(start, start + PAGE_SIZE);
 }
@@ -75,7 +177,8 @@ function renderPager(totalPages) {
 }
 
 function renderRows() {
-  const visible = visibleStocks();
+  const filters = activeFilters();
+  const visible = filteredSortedStocks();
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   if (currentPage > totalPages) currentPage = totalPages;
   const start = (currentPage - 1) * PAGE_SIZE;
@@ -85,6 +188,7 @@ function renderRows() {
   const range = document.querySelector('#resultRange');
   if (range) range.textContent = !stocksLoaded ? 'Loading companies…' : visible.length ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, visible.length)} of ${visible.length} results` : 'No companies match these filters';
   renderPager(totalPages);
+  renderPills(filters);
   lucide.createIcons();
 }
 async function refreshQuotes() {
@@ -99,6 +203,8 @@ async function refreshQuotes() {
       if (!stock) return;
       stock.price = `$${Number(quote.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       stock.change = `${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%`;
+      stock.priceNum = quote.price;
+      stock.changeNum = quote.changePercent;
     });
     renderRows();
     marketStatus.textContent = 'Live refresh';
@@ -124,10 +230,50 @@ document.querySelector('.pager').addEventListener('click', e => {
   renderRows();
   loadPageData();
 });
+
+// --- Filters, sort, reset (all act on the full universe) ---
+function refilter() {
+  currentPage = 1;
+  renderRows();
+  loadPageData();
+}
+['#marketCap', '#roe', '#growth'].forEach(selector => {
+  document.querySelector(selector).addEventListener('change', refilter);
+});
+document.querySelector('#sortSelect').addEventListener('change', event => {
+  const [key, dir] = event.target.value.split('-');
+  setSort(key, dir);
+  refilter();
+});
+document.querySelector('thead').addEventListener('click', event => {
+  const th = event.target.closest('th[data-sort]');
+  if (!th) return;
+  const key = th.dataset.sort;
+  // Clicking a column sorts by it; clicking again flips the direction.
+  setSort(key, sortKey === key && sortDir === 'desc' ? 'asc' : 'desc');
+  refilter();
+});
+document.querySelector('#activeFilterList').addEventListener('click', event => {
+  const pill = event.target.closest('[data-clear-filter]');
+  if (!pill) return;
+  const key = pill.dataset.clearFilter;
+  if (key === 'cap') document.querySelector('#marketCap').value = 'all';
+  if (key === 'roe') document.querySelector('#roe').value = 'all';
+  if (key === 'growth') document.querySelector('#growth').value = 'any';
+  refilter();
+});
+document.querySelector('#resetFilters').addEventListener('click', () => {
+  document.querySelector('#marketCap').value = 'all';
+  document.querySelector('#roe').value = 'all';
+  document.querySelector('#growth').value = 'any';
+  activeSector = 'all';
+  document.querySelectorAll('.chip').forEach(c => c.classList.toggle('selected', c.dataset.filter === 'all'));
+  setSort('cap', 'desc');
+  refilter();
+});
 tbody.addEventListener('click', e => { const star = e.target.closest('[data-star]'); if (star) { const t = star.dataset.star; favorites.has(t) ? favorites.delete(t) : favorites.add(t); renderRows(); return; } const row = e.target.closest('[data-stock]'); if (row) window.openProfile?.(row.dataset.stock); });
 document.querySelector('#closeDrawer').addEventListener('click', closeDrawer); scrim.addEventListener('click', closeDrawer); function closeDrawer(){detailDrawer.classList.remove('open');scrim.classList.remove('open');detailDrawer.setAttribute('aria-hidden','true')}
 document.querySelectorAll('.filter-toggle').forEach(button => button.addEventListener('click', () => { const content = button.nextElementSibling; if (!content || !content.classList.contains('filter-content')) return; const open = button.getAttribute('aria-expanded') === 'true'; button.setAttribute('aria-expanded', !open); content.hidden = open; button.querySelector('svg')?.setAttribute('data-lucide', open ? 'chevron-down' : 'chevron-up'); lucide.createIcons(); }));
-document.querySelector('#resetFilters').addEventListener('click', () => { document.querySelector('#marketCap').value='all'; document.querySelector('#roe').value='all'; document.querySelectorAll('.active-filter').forEach(f=>f.remove()); });
 const stockSearch = document.querySelector('#stockSearch');
 const searchInput = document.querySelector('#stockSearchInput');
 const searchMessage = document.querySelector('#searchMessage');
@@ -233,6 +379,8 @@ async function refreshFundamentals() {
       stock.pe = f.pe != null ? f.pe.toFixed(1) : '—';
       stock.roe = f.roe != null ? `${(f.roe * 100).toFixed(1)}%` : '—';
       stock.growth = f.growth != null ? `${f.growth >= 0 ? '+' : ''}${(f.growth * 100).toFixed(1)}%` : '—';
+      stock.capNum = f.cap ?? null; stock.peNum = f.pe ?? null;
+      stock.roeNum = f.roe ?? null; stock.growthNum = f.growth ?? null;
     });
     renderRows();
   } catch (error) {
@@ -245,5 +393,6 @@ function loadPageData() {
   refreshFundamentals();
 }
 renderRows(); lucide.createIcons();
+setSort('cap', 'desc');
 loadUniverse(); refreshStrip();
 setInterval(() => { refreshQuotes(); refreshStrip(); refreshFundamentals(); }, 60000);

@@ -599,6 +599,7 @@ def statements(symbol):
     cfo = annual(["NetCashProvidedByOperatingActivities", "NetCashProvidedByUsedInOperatingActivities"])
     capex = annual(["PaymentsToAcquirePropertyPlantAndEquipment"])
     dividends = annual(["PaymentsOfDividends"])
+    advertising = annual(["AdvertisingExpense"])
     curr_assets = annual(["AssetsCurrent"], flow=False)
     curr_liab = annual(["LiabilitiesCurrent"], flow=False)
     receivables = annual(["AccountsReceivableNetCurrent"], flow=False)
@@ -630,6 +631,10 @@ def statements(symbol):
             "capex": capex.get(fy),
             "fcf": ((cfo.get(fy) or 0) - (capex.get(fy) or 0)) if cfo.get(fy) is not None and capex.get(fy) is not None else None,
             "dividends": dividends.get(fy),
+            # Advertising expense, as reported in the 10-K. Filers that do
+            # not break it out (e.g. Google, JPMorgan) get None — shown as
+            # "—", never estimated.
+            "advertising": advertising.get(fy),
         })
         ratio_rows.append({
             "fy": fy,
@@ -642,6 +647,7 @@ def statements(symbol):
             "asset_turnover": (rev / assets.get(fy)) if rev and assets.get(fy) else None,
             "debtor_days": (receivables.get(fy) / rev * 365) if receivables.get(fy) is not None and rev else None,
             "inventory_days": (inventory.get(fy) / cogs.get(fy) * 365) if inventory.get(fy) is not None and cogs.get(fy) else None,
+            "ad_pct": (advertising.get(fy) / rev) if advertising.get(fy) is not None and rev else None,
         })
 
     quarters = []

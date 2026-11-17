@@ -31,7 +31,32 @@ from the company's own 10-K and 10-Q filings:
   ROE, and growth). A dash means the filings do not support that figure.
 - The profile page shows peer comparison, quarterly results (last 12
   quarters), profit & loss, balance sheet, cash flow, and ratios for the last
-  ten reported financial years, all from the filings.
+  ten reported financial years, all from the filings. The P&L also shows
+  **advertising expense** (us-gaap AdvertisingExpense from the 10-K) and the
+  ratios table shows **ad spend / revenue**, for the 165 of 517 tickers that
+  break advertising out in their filings (Amazon $23.5B in FY2025, 3.3% of
+  revenue; Microsoft $2.7B in FY2026; Walmart $5.4B in FY2026). Filers that
+  do not report it — Google and JPMorgan among them — show "—" for those
+  years, never an estimate.
+- **Live endpoint resilience:** `GET /api/financials` fetches live EDGAR
+  facts + metrics for the company and its top 7 peers in parallel (the
+  peer map is cap-sorted, so the top 7 are the largest peers; the rest of
+  the peer table uses their pre-built static metrics). If the live fetch
+  fails — EDGAR slow or unreachable — the endpoint serves the pre-built
+  `data/financials/{ticker}.json` (same shape) instead of a 503; an unknown
+  ticker still returns 404. This keeps the profile loading (ROE,
+  debt/equity, EPS) even when the live source is having a bad minute.
+- **Filters & sort:** the Market cap, ROE, and revenue-growth dropdowns
+  filter the full 517-row universe, and the Sort control (or clicking a
+  column header) sorts by market cap, P/E, ROE, revenue growth, price, or
+  1D change, ascending or descending, on numeric values. Filtering and
+  sorting read `data/fundamentals-summary.json` (one compact file with the
+  numeric cap, P/E, ROE, growth, price, and daily change for all 517
+  tickers, rebuilt with the static data), because the table only fetches
+  live fundamentals for its visible page. A row missing the value a filter
+  needs is excluded, never guessed; missing values always sort last.
+  Reset clears every filter and the sort back to the default (market cap,
+  descending) and re-renders.
 - **Peers:** the eight seeded stocks (AAPL, MSFT, NVDA, GOOGL, LLY, JPM, XOM,
   VST) use curated peer lists of 10–12 same-industry names. Every other
   ticker gets peers from `data/peer-map.json`, built from the universe:

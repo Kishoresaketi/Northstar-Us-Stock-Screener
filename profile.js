@@ -59,6 +59,9 @@ function renderFinancials(data) {
       ['Operating income', ...annual.map(r => fmtMillions(r.operating_income))],
       ['Net income', ...annual.map(r => fmtMillions(r.net_income))],
       ['EPS diluted', ...annual.map(r => fmtDollars(r.eps))],
+      // Advertising expense only shows for filers that break it out in
+      // their 10-K (165 of 517); the rest get no row, never a made-up number.
+      ...(annual.some(r => r.advertising != null) ? [['Advertising expense', ...annual.map(r => fmtMillions(r.advertising))]] : []),
     ];
     table('profitTable', ['Metric', ...years], profitRows);
     table('balanceTable', ['Metric', ...years],
@@ -80,7 +83,8 @@ function renderFinancials(data) {
        ['Current ratio', ...ratios.map(r => fmtNum(r.current_ratio))],
        ['Asset turnover', ...ratios.map(r => fmtNum(r.asset_turnover))],
        ['Debtor days', ...ratios.map(r => fmtDays(r.debtor_days))],
-       ['Inventory days', ...ratios.map(r => fmtDays(r.inventory_days))]]);
+       ['Inventory days', ...ratios.map(r => fmtDays(r.inventory_days))],
+       ...(ratios.some(r => r.ad_pct != null) ? [['Ad spend / revenue', ...ratios.map(r => fmtPct(r.ad_pct))]] : [])]);
   } else {
     const note = 'No 10-K annuals filed yet for this company, so the ten-year history is not available.';
     emptyTable('profitTable', ['Metric'], note);
