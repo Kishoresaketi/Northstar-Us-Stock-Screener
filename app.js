@@ -8,6 +8,7 @@ const PAGE_SIZE = 15;
 let currentPage = 1;
 const tbody = document.querySelector('#stockRows');
 let activeSector = 'all';
+let companyQuery = '';
 let favorites = new Set();
 
 function sectorSlug(gics) {
@@ -139,7 +140,8 @@ async function loadUniverse() {
 
 function filteredSortedStocks() {
   const filters = activeFilters();
-  return sortRows(stocks.filter(s => (activeSector === 'all' || s.sector === activeSector) && passesFilters(s, filters)));
+  const q = companyQuery.trim().toLowerCase();
+  return sortRows(stocks.filter(s => (activeSector === 'all' || s.sector === activeSector) && passesFilters(s, filters) && (!q || s.ticker.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))));
 }
 
 function visibleStocks() {
@@ -186,7 +188,7 @@ function renderRows() {
   tbody.innerHTML = page.map((s, index) => `<tr><td><button class="star ${favorites.has(s.ticker) ? 'active' : ''}" data-star="${s.ticker}" aria-label="Save ${s.ticker}"><i data-lucide="star"></i></button></td><td><button class="company-cell row-button" data-stock="${s.ticker}"><span class="company-icon">${s.icon}</span><span><span class="company-name">${s.name}</span><span class="company-ticker">${s.ticker}</span></span></button></td><td>${s.price}</td><td class="${s.change.startsWith('-') ? 'negative' : 'positive'}">${s.change}</td><td>${s.cap}</td><td>${s.pe}</td><td>${s.roe}</td><td class="${s.growth.startsWith('-') ? 'negative' : 'growth'}">${s.growth}</td><td><button class="row-button" data-stock="${s.ticker}" aria-label="View ${s.name}"><i data-lucide="chevron-right"></i></button></td></tr>`).join('');
   document.querySelector('#resultCount').textContent = String(visible.length);
   const range = document.querySelector('#resultRange');
-  if (range) range.textContent = !stocksLoaded ? 'Loading companies…' : visible.length ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, visible.length)} of ${visible.length} results` : 'No companies match these filters';
+  if (range) range.textContent = !stocksLoaded ? 'Loading companies…' : visible.length ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, visible.length)} of ${visible.length} results` : (companyQuery ? 'No companies match that search' : 'No companies match these filters');
   renderPager(totalPages);
   renderPills(filters);
   lucide.createIcons();
@@ -280,6 +282,26 @@ const searchMessage = document.querySelector('#searchMessage');
 const searchResults = document.querySelector('#searchResults');
 document.querySelector('#openSearch').addEventListener('click', () => { stockSearch.hidden = false; searchInput.focus(); });
 document.querySelector('#closeSearch').addEventListener('click', () => { stockSearch.hidden = true; searchResults.hidden = true; });
+// Visible company finder above the results table: filters the 517 by
+// ticker or name as you type, so nobody has to page through the list.
+const companySearchInput = document.querySelector('#companySearch');
+const clearCompanySearch = document.querySelector('#clearCompanySearch');
+if (companySearchInput) {
+  companySearchInput.addEventListener('input', () => {
+    companyQuery = companySearchInput.value;
+    currentPage = 1;
+    clearCompanySearch.hidden = !companySearchInput.value;
+    renderRows();
+  });
+  clearCompanySearch.addEventListener('click', () => {
+    companySearchInput.value = '';
+    companyQuery = '';
+    currentPage = 1;
+    clearCompanySearch.hidden = true;
+    renderRows();
+    companySearchInput.focus();
+  });
+}
 let searchTimer = null;
 let lastSuggestions = [];
 searchInput.addEventListener('input', () => {

@@ -5,3 +5,8 @@
 .search-results button b{font-family:'DM Mono',monospace;font-size:12px}
 .search-results button span{color:#64716a;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .search-results button em{margin-left:auto;font-style:normal;font-size:10px;color:#94a39a;white-space:nowrap}
+.company-search{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid var(--line);padding:0 12px;margin:14px 0 0;height:42px}
+.company-search>svg{width:16px;color:#64716a;flex:none}
+.company-search input{border:0;outline:0;min-width:0;flex:1;height:40px;font:600 13px Manrope;color:var(--ink)}
+.company-search input::placeholder{color:#94a39a;font-weight:500}
+.company-search .icon-button{flex:none}
