@@ -369,11 +369,30 @@ def _annual_concept(facts, concepts, flow=True, prefer=None):
     if not by_concept:
         return []
     best = max(by_concept.values(), key=lambda pts: pts[-1]["end"])
+    chosen = best
     if prefer in by_concept:
         pref = by_concept[prefer]
         if _days_between(pref[-1]["end"], best[-1]["end"]) <= 45:
-            return pref
-    return best
+            chosen = pref
+    if prefer is None:
+        # A concept can go stale mid-series (a filer switches tags after a
+        # spin-off or merger): fill years the winner lacks from the other
+        # concepts, most current first, so the series keeps its history
+        # instead of going blank for the early years. Skipped when a
+        # preferred concept wins (net income), where filling from the
+        # total-income concept would silently mix definitions.
+        have = {int(p["end"][:4]) for p in chosen}
+        others = sorted(
+            (pts for pts in by_concept.values() if pts is not chosen),
+            key=lambda pts: pts[-1]["end"], reverse=True)
+        merged = list(chosen)
+        for pts in others:
+            for p in pts:
+                if int(p["end"][:4]) not in have:
+                    merged.append(p)
+                    have.add(int(p["end"][:4]))
+        chosen = sorted(merged, key=lambda p: p["end"])
+    return chosen
 
 
 def _annual_derived(facts, concept, flow):
@@ -596,8 +615,8 @@ def statements(symbol):
     equity = annual(["StockholdersEquity"], flow=False)
     debt = {int(k[:4]): v for k, v in _debt_by_end(data).items()}
     cash = annual(["CashAndCashEquivalentsAtCarryingValue"], flow=False)
-    cfo = annual(["NetCashProvidedByOperatingActivities", "NetCashProvidedByUsedInOperatingActivities"])
-    capex = annual(["PaymentsToAcquirePropertyPlantAndEquipment"])
+    cfo = annual(["NetCashProvidedByOperatingActivities", "NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"])
+    capex = annual(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"])
     dividends = annual(["PaymentsOfDividends"])
     advertising = annual(["AdvertisingExpense"])
     curr_assets = annual(["AssetsCurrent"], flow=False)
