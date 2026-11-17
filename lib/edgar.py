@@ -298,24 +298,43 @@ def _quarterly(facts, concept):
     not (fy, fp). Per end date, a framed quarter point (the 3-month figure)
     beats a frameless one, and among frameless points the smallest by
     magnitude wins, since the 3-month figure is smaller than the YTD one.
+
+    A 10-K also restates prior quarters (fp FY, with a calendar-quarter
+    frame): those framed points are the latest restated vintage, so they
+    count here too — otherwise the quarters stay on the pre-spin-off
+    vintage while the annuals move to the restated one, and the derived
+    Q4 goes negative (DuPont: Q4 FY2024 revenue -$2,245M). Among framed
+    points the latest filing wins; the quarter comes from the frame.
     """
     by_end = {}
     for p in _points(facts, concept):
-        if p["form"] != "10-Q" or p["fp"] not in ("Q1", "Q2", "Q3"):
+        framed = _is_quarter_frame(p)
+        if p["form"] == "10-Q":
+            if p["fp"] not in ("Q1", "Q2", "Q3"):
+                continue
+            fp = p["fp"]
+        elif p["form"] == "10-K" and framed and p["frame"][-2:] in ("Q1", "Q2", "Q3"):
+            fp = p["frame"][-2:]
+        else:
             continue
         key = p["end"]
-        framed = _is_quarter_frame(p)
         current = by_end.get(key)
         if current is None:
-            by_end[key] = (framed, p)
+            by_end[key] = (framed, p, fp)
         elif framed and not current[0]:
-            by_end[key] = (True, p)
+            by_end[key] = (True, p, fp)
         elif framed == current[0]:
             if framed:
-                by_end[key] = (True, p)
+                if (p["filed"], p["accn"]) > (current[1]["filed"], current[1]["accn"]):
+                    by_end[key] = (True, p, fp)
             elif abs(p["val"]) < abs(current[1]["val"]):
-                by_end[key] = (False, p)
-    return sorted([v[1] for v in by_end.values()], key=lambda p: p["end"])
+                by_end[key] = (False, p, fp)
+    out = []
+    for _framed, p, fp in by_end.values():
+        q = dict(p)
+        q["fp"] = fp
+        out.append(q)
+    return sorted(out, key=lambda p: p["end"])
 
 
 def _annual(facts, concept):
