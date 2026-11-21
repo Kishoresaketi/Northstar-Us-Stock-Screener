@@ -786,11 +786,23 @@ _ABBREVIATIONS = {
     # Manager truncations seen in 13F names (Q2 2026): "INTERNATIONAL
     # BUSINESS MACHS" for IBM, "ILLINOIS TOOL WKS" for ITW.
     "MACHS": "MACHINES", "WKS": "WORKS",
+    # Abbreviations that hid real CUSIPs from the name matcher (Q2 2026
+    # audit): "FORD MTR CO" for Ford, "JOHNSON CTLS INTL" for Johnson
+    # Controls, "LIVE NATION ENTMT" for Live Nation, "APPLIED MATLS"
+    # for Applied Materials, "MARTIN MARIETTA MATLS", "FIDELITY NATL
+    # INFORMATION SV" for FIS. Without these the matcher fell back to
+    # near-zero stub CUSIPs (Ford showed 0.0003% institutional).
+    "MTR": "MOTOR", "CTLS": "CONTROLS", "ENTMT": "ENTERTAINMENT",
+    "MATLS": "MATERIALS", "SV": "SERVICES",
 }
 _DROPPED_WORDS = {
     "INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "LTD", "LIMITED",
     "LLC", "PLC", "LP", "LLP", "COMPANY", "COMPANIES", "GROUP", "HOLDINGS",
     "HOLDING", "DELAWARE", "THE", "AND", "OF", "COMMON", "TRUST",
+    # Filler words in REIT share descriptions ("EQUITY RESIDENTIAL SH
+    # BEN INT" is the shares of beneficial interest, not a different
+    # company from "EQUITY RESIDENTIAL").
+    "SH", "BEN", "INT",
     # Foreign legal suffixes.
     "NV", "SA", "AG", "SE", "AB", "BV", "KK", "ASA", "AS", "OYJ", "SPA",
     "SL", "SAS", "GMBH",
@@ -810,7 +822,11 @@ def _normalize_name(name):
     # Strip accents first ("Estée" -> "Estee") so accented universe names
     # match the plain-ASCII names managers write, then drop apostrophes
     # and periods without spacing ("Lowe's" -> "LOWES", "J.M." -> "JM").
+    # Dashes are spaces, not nothing: the universe writes "Brown–Forman"
+    # with an en dash, and dropping it ("BROWNFORMAN") broke both the
+    # exact match and the other-issuer veto for BRO/BF-B.
     import unicodedata
+    name = name.replace("–", " ").replace("—", " ").replace("‐", " ")
     text = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
     text = text.upper().replace("'", "").replace(".", "")
     text = re.sub(r"[^A-Z0-9 ]", " ", text)
@@ -923,6 +939,15 @@ NAME_ALIASES = {
     "SUPERMICRO": "SUPER MICRO COMPUTER",
     "HONEYWELL TECHNOLOGIES": "HONEYWELL INTERNATIONAL",
     "UNIVERSAL HEALTH SERVICES": "UNIVERSAL HEALTH",
+    # Renames the matcher cannot bridge (Q2 2026 audit): MicroStrategy
+    # became Strategy in 2025 (filers write "STRATEGY INC"); BNY Mellon
+    # files as "BANK NEW YORK MELLON CORP"; Healthpeak was formerly
+    # Health Care Property Investors ("HEALTH CARE PPTY INVS INC");
+    # Vivmark Residential was formerly Equity Residential.
+    "MICROSTRATEGY": "STRATEGY",
+    "BNY MELLON": "BANK NEW YORK MELLON",
+    "HEALTHPEAK PROPERTIES": "HEALTH CARE PROPERTY INVESTMENT",
+    "VIVMARK RESIDENTIAL": "EQUITY RESIDENTIAL",
 }
 
 # Tickers whose common stock is reported under several CUSIPs in 13F
@@ -961,8 +986,79 @@ CUSIP_OVERRIDES = {
 # share-count jump. The Q2 2026 10-Q cover (filed Jul 29, 2026,
 # accession 0001690820-26-000055) reports Class A 719,916,415 +
 # Class B 380,547,355 = 1,100,463,770 total.
+# Per-class cover counts (Q2 2026 audit): the facts API's
+# dei:EntityCommonStockSharesOutstanding is the TOTAL across classes
+# (Alphabet, Berkshire, Fox, News Corp) or absent/stale (Visa's stops
+# in 2010, Berkshire's in 2011, Erie/Constellation/Tyson/Thomson
+# Reuters have none), so dividing a single class's 13F shares by the
+# total understates that class's ownership. Each value below was read
+# off the company's own filing cover or balance sheet and verified
+# against the filing text in Nov 2026:
+# GOOGL/GOOG — Alphabet Q2 2026 10-Q balance sheet (filed Jul 23,
+# 2026, accession 0001652044-26-000071): issued and outstanding at
+# Jun 30, 2026, Class A 5,868,000,000, Class B 835,000,000,
+# Class C 5,527,000,000 (total 12,230,000,000, matching dei).
+# BRK-B — Berkshire Q2 2026 10-Q cover (filed Aug 10, 2026, accession
+# 0001193125-26-341032): Class B 1,408,035,161 shares outstanding as
+# of Jul 29, 2026 (Class A 488,450).
+# BF-B — Brown-Forman Q1 FY2027 10-Q cover (filed Sep 2, 2026,
+# accession 0000014693-26-000052): Class B 290,383,416 shares
+# outstanding as of Aug 31, 2026 (Class A 168,480,849).
+# FOXA/FOX — Fox Q1 FY2027 10-Q balance-sheet footnote (filed Nov 2,
+# 2026, accession 0001628280-26-068670): Class A 199,338,182 and
+# Class B 220,248,764 issued and outstanding at Jun 30, 2026.
+# NWSA/NWS — News Corp Q1 FY2027 10-Q balance-sheet footnote (filed
+# Nov 5, 2026, accession 0001564708-26-000250): Class A 362,139,890
+# and Class B 181,281,012 issued and outstanding at Jun 30, 2026.
+# V — Visa Q2 2026 10-Q cover (filed Jul 29, 2026, accession
+# 0001403161-26-000104): Class A 1,704,112,694 shares outstanding as
+# of Jul 21, 2026.
+# ERIE — Erie Indemnity Q2 2026 10-Q cover and balance sheet (filed
+# Jul 30, 2026, accession 0001628280-26-051079): Class A 46,189,068
+# shares outstanding as of Jul 24, 2026.
+# STZ — Constellation Brands Q2 FY2027 10-Q balance sheet (filed
+# Oct 7, 2026, accession 0000016918-26-000040): Class A issued
+# 212,699,732 less treasury 42,893,874 = 169,805,858 outstanding at
+# Aug 31, 2026 (cover count Sep 30, 2026 is 169,198,487 after further
+# buybacks; the Aug 31 count is closer to the quarter end).
+# TSN — Tyson Q2 2026 10-Q cover (filed Aug 3, 2026, accession
+# 0000100493-26-000058): Class A 281,792,507 shares outstanding as of
+# Jun 27, 2026 (Class B 70,009,005).
+# TRI — Thomson Reuters files no dei share count (foreign filer, IFRS).
+# Q2 2026 6-K XBRL (filed Aug 6, 2026, accession 0001193125-26-338256)
+# reports H1 2026 weighted-average basic shares 438,384,963; no
+# point-in-time count is stated, so this weighted average is the
+# closest verified Q2 figure. Cross-check: independent 13F trackers
+# report ~404.8M shares / 92% for Q2 2026, consistent with
+# 402,530,885 / 438,384,963 = 91.82%.
+# DLR — the facts API's latest dei point is Apr 29, 2026 (351,406,070),
+# but Digital Realty issued ~18.6M shares in Q2 2026. The Q2 2026
+# 10-Q cover (filed Jul 31, 2026, accession 0001104659-26-089296)
+# reports 370,036,176 shares outstanding at Jul 29, 2026. With the
+# April count the figure reads 100.83%; with the cover count it is
+# 95.75% — a denominator correction, not a numerator problem.
+# CNP — the facts API's latest dei point is Apr 15, 2026 (654,169,480).
+# The Q2 2026 10-Q cover (filed Jul 2026) reports 658,720,288 shares
+# outstanding as of Jul 22, 2026. The correction moves the figure
+# from 105.32% to 104.59% — still over 100%, so the overage is
+# genuine; only the denominator was stale.
 SHARES_OUTSTANDING_OVERRIDES = {
     "CVNA": (1100463770, "2026-06-30"),
+    "GOOGL": (5868000000, "2026-06-30"),
+    "GOOG": (5527000000, "2026-06-30"),
+    "BRK-B": (1408035161, "2026-07-29"),
+    "BF-B": (290383416, "2026-08-31"),
+    "FOXA": (199338182, "2026-06-30"),
+    "FOX": (220248764, "2026-06-30"),
+    "NWSA": (362139890, "2026-06-30"),
+    "NWS": (181281012, "2026-06-30"),
+    "V": (1704112694, "2026-07-21"),
+    "ERIE": (46189068, "2026-07-24"),
+    "STZ": (169805858, "2026-08-31"),
+    "TSN": (281792507, "2026-06-27"),
+    "TRI": (438384963, "2026-06-30"),
+    "DLR": (370036176, "2026-07-29"),
+    "CNP": (658720288, "2026-07-22"),
 }
 
 
@@ -979,13 +1075,80 @@ def _cusip_variants(entry):
     return []
 
 
-def _resolve_candidates(symbol, candidates, totals):
+def _class_letter_match(symbol, totals, cusip):
+    """Does any recorded variant of this CUSIP name the ticker's share
+    class? The class letter lives in the titleOfClass ("COM CL A"), in
+    the issuer name ("ALPHABET INC. CLASS A", "BERKSHIRE HATHAWAY INC
+    DEL CL B NEW", "BROWN-FORMAN CORP. - B"), or as a trailing letter
+    on the issuer name ("BERKSHIRE HATHAWAY INC B"). The dash/trailing
+    forms matter: Brown-Forman's Class B CUSIP (115637209, 584 filers)
+    names its class only as "- B", and without them the resolver fell
+    back to zero-share "CL B" stubs and left BF-B blank."""
+    wanted = CLASS_TICKERS.get(symbol)
+    if not wanted:
+        return False
+    for n, cl in _cusip_variants(totals.get(cusip, {})):
+        hay = ((n or "") + " " + (cl or "")).upper()
+        if (re.search(rf"\bCL\.?\s*{wanted}\b", hay)
+                or re.search(rf"\bCLASS\s*{wanted}\b", hay)
+                or re.search(rf"\s{wanted}$", (n or "").upper())):
+            return True
+    return False
+
+
+_STAGE_SCORE = {"exact": 3, "token": 2, "subset": 1, "spaceless": 1,
+                "override": 3}
+
+
+def _score_candidates(symbol, candidates, totals, stages=None):
+    """Rank eligible CUSIP candidates with a transparent score.
+
+    Eligibility: plain common stock (see _is_common_class) with
+    reported shares — a zero-share stub can never win, and a bond,
+    note, option or preferred never competes with the common stock.
+    Ranking, in order: share-class match (CLASS_TICKERS only), most
+    distinct reporting managers (filers), most reported shares, best
+    matching stage as a tie-break. Filers lead on purpose: the Q2 2026
+    audit found exact-name stubs (1-3 filers, a few thousand shares)
+    for 18 tickers — Accenture, Bank of America, Exxon Mobil — where
+    a fidelity-first rule would pick the stub over the real CUSIP
+    with thousands of filers. Name fidelity is recorded in the score
+    for the diagnostics file, but it never outranks overwhelming
+    manager consensus; a wrong issuer is caught by the other-issuer
+    veto in build_cusip_map, not by the ranking. Returns [(cusip,
+    score)] sorted best-first.
+    """
+    stages = stages or {}
+    scored = []
+    for c in candidates:
+        entry = totals.get(c, {})
+        if not any(_is_common_class(cl)
+                   for _n, cl in _cusip_variants(entry)):
+            continue
+        if (entry.get("shares_all") or 0) <= 0:
+            continue
+        stage = stages.get(c)
+        stage_name = _STAGE_NAMES[stage] if stage is not None else "?"
+        scored.append((c, {
+            "class_match": _class_letter_match(symbol, totals, c),
+            "filers": entry.get("filers") or 0,
+            "shares_all": entry.get("shares_all") or 0,
+            "stage": stage_name,
+            "stage_score": _STAGE_SCORE.get(stage_name, 1),
+        }))
+    scored.sort(key=lambda kv: (not kv[1]["class_match"],
+                                -kv[1]["filers"], -kv[1]["shares_all"],
+                                -kv[1]["stage_score"], kv[0]))
+    return scored
+
+
+def _resolve_candidates(symbol, candidates, totals, stages=None):
     """Pick one CUSIP from the candidates under one issuer name: the
     ticker's share class first (CLASS_TICKERS), else the plain
     common-stock CUSIP reported by the MOST DISTINCT 13F MANAGERS
-    (filers), tie-broken by most reported shares. Returns None if no
-    candidate resolves. Class matches are picked the same way, not
-    first-seen: a zero-share stub CUSIP must never beat the real one.
+    (filers), tie-broken by most reported shares, then best matching
+    stage. Returns None if no candidate resolves. A zero-share stub
+    CUSIP must never beat the real one.
 
     Most-filers, not most-shares, is the discriminator — Q2 2026 proved
     why: a mislabeled variant can attach a WRONG CUSIP that carries
@@ -999,41 +1162,81 @@ def _resolve_candidates(symbol, candidates, totals):
     filers). The true common-stock CUSIP is the one the most managers
     report; the share total follows from it, never the other way round.
     """
-    wanted = CLASS_TICKERS.get(symbol)
-    if wanted:
-        # The class letter lives in the titleOfClass ("COM CL A") or in
-        # the issuer name ("ALPHABET INC. CLASS A", whose class field is
-        # just "Stock") — check every recorded variant of both, then
-        # take the most-held match.
-        classed = []
-        for c in candidates:
-            hays = [((n or "") + " " + (cl or "")).upper()
-                    for n, cl in _cusip_variants(totals[c])]
-            if any(re.search(rf"\bCL\.?\s*{wanted}\b", hay)
-                   or re.search(rf"\bCLASS\s*{wanted}\b", hay) for hay in hays):
-                classed.append(c)
-        if classed:
-            best = max(classed, key=lambda c: (totals[c].get("filers", 0),
-                                                totals[c].get("shares_all", 0)))
-            if totals[best].get("shares_all", 0) > 0:
-                return best
-            return None
-    common = [c for c in candidates
-              if any(_is_common_class(cl) for _n, cl in _cusip_variants(totals[c]))]
-    if common:
-        best = max(common, key=lambda c: (totals[c].get("filers", 0),
-                                          totals[c].get("shares_all", 0)))
-        if totals[best].get("shares_all", 0) > 0:
-            return best
-    return None
+    scored = _score_candidates(symbol, candidates, totals, stages)
+    return scored[0][0] if scored else None
+
+
+_STAGE_NAMES = ("exact", "token", "subset", "spaceless")
+
+
+def _pool_candidates(norm, by_name, by_tokens):
+    """Pool candidate CUSIPs for one normalized universe name, recording
+    the best (strictest) matching stage per CUSIP: 0 exact normalized
+    name, 1 order-insensitive token-set match, 2 subset match (the
+    universe name's tokens are all inside one 13F name), 3 spaceless
+    match. The pool is the union over stages — a candidate that matches
+    exactly and fuzzily is recorded at stage 0."""
+    tokens_u = frozenset(norm.split())
+    stage = {}
+
+    def add(cusips, st):
+        for c in cusips:
+            if c not in stage or st < stage[c]:
+                stage[c] = st
+
+    add(by_name.get(norm, []), 0)
+    if tokens_u:
+        # (b) token-set match
+        for tokens_t, cusips in by_tokens.items():
+            if _tokens_match(tokens_u, tokens_t):
+                add(cusips, 1)
+        # (c) subset match
+        for tokens_t, cusips in by_tokens.items():
+            if tokens_u < tokens_t:
+                add(cusips, 2)
+        # (d) spaceless match
+        if norm:
+            spaceless_u = norm.replace(" ", "")
+            for name13, cusips in by_name.items():
+                if name13.replace(" ", "") == spaceless_u:
+                    add(cusips, 3)
+    return stage
+
+
+def _candidate_record(symbol, cusip, stage, totals):
+    """One diagnostic record for a pooled candidate CUSIP: its
+    reporting-manager count, share totals, matching stage, whether any
+    recorded variant is plain common stock, and whether it was
+    excluded as an ETF (an ETF is never a universe company's common
+    stock, even when managers label its class "COM")."""
+    entry = totals.get(cusip, {})
+    variant_names = [n.upper().split()
+                     for n, _cl in _cusip_variants(entry)]
+    excluded = "ETF" if any("ETF" in toks for toks in variant_names) else None
+    return {
+        "cusip": cusip,
+        "stage": _STAGE_NAMES[stage] if stage is not None else "override",
+        "filers": entry.get("filers") or 0,
+        "shares_all": entry.get("shares_all") or 0,
+        "shares": entry.get("shares") or 0,
+        "common_class": any(_is_common_class(cl)
+                            for _n, cl in _cusip_variants(entry)),
+        "excluded": excluded,
+        "name": entry.get("name"),
+        "class": entry.get("class"),
+    }
 
 
 def build_cusip_map(totals, universe):
     """Map universe tickers to CUSIPs using the 13F issuer names.
 
-    Returns (mapping, unmatched, ambiguous): mapping is ticker -> CUSIP;
-    unmatched lists tickers with no name match; ambiguous lists tickers
-    whose name matched several CUSIPs without a class resolution.
+    Returns (mapping, unmatched, ambiguous, pools): mapping is ticker
+    -> CUSIP; unmatched lists tickers with no name match; ambiguous
+    lists tickers whose name matched several CUSIPs without a class
+    resolution; pools maps every ticker to its candidate records
+    (see _candidate_record), including ETF-excluded candidates, so the
+    audit and the diagnostics file can show exactly what was
+    considered and why a candidate lost.
 
     Matching is staged, most to least strict, so a short universe name
     never steals another company's CUSIP:
@@ -1043,12 +1246,22 @@ def build_cusip_map(totals, universe):
     (catches short universe names like "Coinbase" for "Coinbase Global"
     or "Air Products" for "Air Products & Chemicals"); (d) spaceless
     match ("MERCADOLIBRE" for "Mercado Libre"). Candidates from ALL
-    stages are pooled and resolved once, by share class then by most
-    shares: a stray small CUSIP whose name happens to match exactly
-    (e.g. a 25k-share Bank of America stub) must never beat the real
-    5.3B-share CUSIP that only matches fuzzily. Stage (c)/(d) only run
-    when (a) and (b) found nothing, so "Apple" still matches "Apple Inc"
-    exactly and never falls through to "Apple Hospitality".
+    stages are pooled and resolved once by _score_candidates: share
+    class first, then most distinct reporting managers, then most
+    reported shares, then best matching stage. A stray small CUSIP
+    whose name happens to match exactly (e.g. a 25k-share Bank of
+    America stub) must never beat the real 5.3B-share CUSIP that only
+    matches fuzzily.
+
+    Vetoes (recorded on the candidate record, never silent): a
+    candidate naming an ETF; a candidate whose recorded name
+    normalizes to a DIFFERENT universe company's name (one CUSIP on
+    two companies — e.g. Brown & Brown's CUSIP in Brown-Forman's
+    pool). The selected record is marked with its score, a mapping
+    confidence (high/medium/low) and warnings (close-margin, thin,
+    no-exact-stage, class-fallback, ambiguous-near-tie) so the
+    diagnostics file can flag mappings that need a human look instead
+    of silently picking an unreliable identifier.
     """
     by_name = {}
     for cusip, entry in totals.items():
@@ -1057,53 +1270,82 @@ def build_cusip_map(totals, universe):
     by_tokens = {}
     for name, cusips in by_name.items():
         by_tokens.setdefault(frozenset(name.split()), []).extend(cusips)
-    mapping, unmatched, ambiguous = {}, [], []
+    # Normalized universe name -> tickers of that issuer (multi-class
+    # tickers share one name: GOOGL/GOOG are both "ALPHABET"). A
+    # candidate whose recorded name normalizes to one of these names
+    # belongs to that issuer; claimed by any other ticker it is vetoed.
+    issuer_names = {}
+    for symbol2, info2 in universe.items():
+        norm2 = _normalize_name(info2.get("name", ""))
+        norm2 = NAME_ALIASES.get(norm2, norm2)
+        issuer_names.setdefault(norm2, set()).add(symbol2)
+    mapping, unmatched, ambiguous, pools = {}, [], [], {}
     for symbol, info in universe.items():
         # Pinned CUSIP (see CUSIP_OVERRIDES): the name matcher gets
         # these wrong, so skip matching entirely.
         if symbol in CUSIP_OVERRIDES and CUSIP_OVERRIDES[symbol] in totals:
             mapping[symbol] = CUSIP_OVERRIDES[symbol]
+            record = _candidate_record(symbol, CUSIP_OVERRIDES[symbol], None, totals)
+            record["selected"] = True
+            record["confidence"] = "override"
+            record["warnings"] = ["override"]
+            pools[symbol] = [record]
             continue
         norm = _normalize_name(info.get("name", ""))
         norm = NAME_ALIASES.get(norm, norm)
-        tokens_u = frozenset(norm.split())
-        pooled = list(by_name.get(norm, []))
-        if tokens_u:
-            # (b) token-set match
-            for tokens_t, cusips in by_tokens.items():
-                if _tokens_match(tokens_u, tokens_t):
-                    pooled.extend(cusips)
-            # (c) subset match
-            for tokens_t, cusips in by_tokens.items():
-                if tokens_u < tokens_t:
-                    pooled.extend(cusips)
-            # (d) spaceless match
-            if norm:
-                spaceless_u = norm.replace(" ", "")
-                for name13, cusips in by_name.items():
-                    if name13.replace(" ", "") == spaceless_u:
-                        pooled.extend(cusips)
-        seen, candidates = set(), []
-        for c in pooled:
-            if c not in seen:
-                seen.add(c)
-                # An exchange-traded fund is never a universe company's
-                # common stock, even when managers label its class
-                # "COM" (the iShares MSCI Europe ETF did exactly that).
-                # Any recorded variant naming it an ETF excludes it.
-                variant_names = [n.upper().split()
-                                 for n, _cl in _cusip_variants(totals.get(c, {}))]
-                if any("ETF" in toks for toks in variant_names):
-                    continue
-                candidates.append(c)
-        resolved = _resolve_candidates(symbol, candidates, totals) if candidates else None
-        if resolved:
+        stage = _pool_candidates(norm, by_name, by_tokens)
+        records = [_candidate_record(symbol, c, st, totals)
+                   for c, st in sorted(stage.items(), key=lambda kv: (kv[1], -(totals.get(kv[0], {}).get("filers") or 0)))]
+        for record in records:
+            if record["excluded"]:
+                continue
+            for variant_name, _cl in _cusip_variants(totals.get(record["cusip"], {})):
+                owners = issuer_names.get(_normalize_name(variant_name))
+                if owners and symbol not in owners:
+                    record["excluded"] = "OTHER_ISSUER"
+                    record["excluded_owner"] = sorted(owners)
+                    break
+        pools[symbol] = records
+        candidates = [r["cusip"] for r in records if not r["excluded"]]
+        scored = _score_candidates(symbol, candidates, totals, stage) if candidates else []
+        if scored:
+            resolved = scored[0][0]
             mapping[symbol] = resolved
+            winner = scored[0][1]
+            runner_up = scored[1][1] if len(scored) > 1 else None
+            warnings = []
+            if runner_up and runner_up["filers"] > 0.5 * winner["filers"]:
+                warnings.append("close-margin")
+            if winner["filers"] < 100:
+                warnings.append("thin")
+            if not any(r["stage"] == "exact" and not r["excluded"]
+                       for r in records):
+                warnings.append("no-exact-stage")
+            if symbol in CLASS_TICKERS and not winner["class_match"]:
+                warnings.append("class-fallback")
+            if (runner_up and runner_up["filers"] >= 0.9 * winner["filers"]
+                    and runner_up["stage"] != winner["stage"]):
+                warnings.append("ambiguous-near-tie")
+            if runner_up and runner_up["filers"] >= 2 * winner["filers"]:
+                warnings.append("runner-up-dominates")
+            if winner["filers"] >= 2 * (runner_up["filers"] if runner_up else 0):
+                confidence = "high"
+            elif runner_up and winner["filers"] >= 1.5 * runner_up["filers"]:
+                confidence = "medium"
+            else:
+                confidence = "low"
+            for record in records:
+                if record["cusip"] == resolved:
+                    record["selected"] = True
+                    record["score"] = winner
+                    record["confidence"] = confidence
+                    record["warnings"] = warnings
+                    break
         elif candidates:
             ambiguous.append((symbol, candidates))
         else:
             unmatched.append(symbol)
-    return mapping, unmatched, ambiguous
+    return mapping, unmatched, ambiguous, pools
 
 
 def build_shareholding(tickers, quarter_end=None, totals=None, log=print):
@@ -1120,7 +1362,7 @@ def build_shareholding(tickers, quarter_end=None, totals=None, log=print):
     else:
         stats = {"quarter_end": quarter_end.isoformat(), "reused_totals": True}
     universe = edgar.universe()
-    mapping, unmatched, ambiguous = build_cusip_map(totals, {s: universe[s] for s in tickers if s in universe})
+    mapping, unmatched, ambiguous, pools = build_cusip_map(totals, {s: universe[s] for s in tickers if s in universe})
     if unmatched:
         log(f"13F: no CUSIP match for {len(unmatched)} tickers: {unmatched[:20]}")
     if ambiguous:
@@ -1161,6 +1403,8 @@ def build_shareholding(tickers, quarter_end=None, totals=None, log=print):
         # SOLE+DFND figure is kept below for comparison.
         inst = entry.get("shares_all")
         pct = (inst / shares_out) if inst and shares_out else None
+        selected = next((r for r in pools.get(symbol, [])
+                         if r.get("selected")), None)
         out[symbol] = {
             "institutions_pct": pct,
             "institutions_shares": inst,
@@ -1172,5 +1416,12 @@ def build_shareholding(tickers, quarter_end=None, totals=None, log=print):
             "cusip": cusip,
             "cusips": group if group else [cusip],
             "quarter": quarter_end.isoformat(),
+            # Mapping quality, from the CUSIP resolution (see
+            # build_cusip_map): high/medium/low/override, plus any
+            # warnings (close-margin, thin, no-exact-stage,
+            # class-fallback, ambiguous-near-tie). The full candidate
+            # pool lives in the diagnostics file, not here.
+            "mapping_confidence": (selected or {}).get("confidence"),
+            "mapping_warnings": (selected or {}).get("warnings") or [],
         }
     return out, totals, stats
