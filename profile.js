@@ -104,10 +104,13 @@ function renderDataNotes(data) {
   box.hidden = !notes.length;
   if (notes.length) lucide.createIcons();
 }
+// Half-yearly derivation: flows sum the two quarters, balances take
+// the later quarter's (half-end) value. Only halves with both quarters
+// reported are shown; a half with a missing quarter is skipped, never
+// estimated. EPS sums the quarters.
+const HALF_FLOW_FIELDS = ['revenue', 'cogs', 'operating_income', 'net_income', 'eps', 'cfo', 'capex', 'fcf', 'dividends'];
+const HALF_STOCK_FIELDS = ['cash', 'assets', 'debt', 'equity', 'curr_assets', 'curr_liab', 'receivables', 'inventory'];
 function halfYearly(quarterly) {
-  // Half-year totals derived from reported quarters: H1 = Q1+Q2, H2 = Q3+Q4.
-  // Only halves with both quarters reported are shown; a half with a
-  // missing quarter is skipped, never estimated. EPS sums the quarters.
   const byFy = {};
   for (const q of quarterly || []) {
     const m = /^Q([1-4]) FY(\d{4})$/.exec(q.label || '');
@@ -121,10 +124,53 @@ function halfYearly(quarterly) {
       const b = byFy[fy][qs[1]];
       if (!a || !b) continue;
       const sum = field => (a[field] != null && b[field] != null) ? a[field] + b[field] : null;
-      halves.push({ label: `${half} FY${fy}`, revenue: sum('revenue'), operating_income: sum('operating_income'), net_income: sum('net_income'), eps: sum('eps') });
+      const entry = { label: `${half} FY${fy}` };
+      for (const field of HALF_FLOW_FIELDS) entry[field] = sum(field);
+      for (const field of HALF_STOCK_FIELDS) entry[field] = b[field] != null ? b[field] : null;
+      halves.push(entry);
     }
   }
   return halves;
+}
+function halfYearlyRatios(halves) {
+  // Ratios for half-year periods, recomputed from the half-yearly
+  // flows and half-end balances. Returns and turnover use trailing
+  // flows (the current half plus the immediately preceding half);
+  // a half whose preceding half is missing — a skipped half-year in
+  // the quarters — gets no trailing figure, never an estimate.
+  const byKey = {};
+  for (const h of halves) {
+    const m = /^H([12]) FY(\d{4})$/.exec(h.label || '');
+    if (m) byKey[`${m[2]}-H${m[1]}`] = h;
+  }
+  const prevHalf = h => {
+    const m = /^H([12]) FY(\d{4})$/.exec(h.label || '');
+    if (!m) return null;
+    return m[1] === '1' ? byKey[`${Number(m[2]) - 1}-H2`] || null : byKey[`${m[2]}-H1`] || null;
+  };
+  const trailing = (h, field) => {
+    const p = prevHalf(h);
+    if (!p || h[field] == null || p[field] == null) return null;
+    return h[field] + p[field];
+  };
+  return halves.map(h => {
+    const ttmRev = trailing(h, 'revenue');
+    const ttmNi = trailing(h, 'net_income');
+    const ttmEbit = trailing(h, 'operating_income');
+    const ttmCogs = trailing(h, 'cogs');
+    return {
+      label: h.label,
+      opm: (h.operating_income != null && h.revenue) ? h.operating_income / h.revenue : null,
+      net_margin: (h.net_income != null && h.revenue) ? h.net_income / h.revenue : null,
+      roe: (ttmNi != null && h.equity) ? ttmNi / h.equity : null,
+      roce: (ttmEbit != null && h.equity && h.debt != null) ? ttmEbit / (h.equity + h.debt) : null,
+      debt_equity: (h.debt != null && h.equity) ? h.debt / h.equity : null,
+      current_ratio: (h.curr_assets && h.curr_liab) ? h.curr_assets / h.curr_liab : null,
+      asset_turnover: (ttmRev != null && h.assets) ? ttmRev / h.assets : null,
+      debtor_days: (h.receivables != null && ttmRev) ? h.receivables / ttmRev * 365 : null,
+      inventory_days: (h.inventory != null && ttmCogs) ? h.inventory / ttmCogs * 365 : null,
+    };
+  });
 }
 let profitData = null;
 function profitRowsFor(period) {
@@ -173,6 +219,109 @@ function renderProfit(period) {
   else emptyTable('profitTable', ['Metric'], period === 'yearly' ? 'No 10-K annuals filed yet for this company, so the ten-year history is not available.' : 'No complete periods reported for this company yet.');
   document.querySelectorAll('#profitPeriodSwitch button').forEach(btn => btn.classList.toggle('selected', btn.dataset.period === period));
 }
+let periodData = null;
+function balanceRowsFor(period) {
+  const { annual, quarterly } = periodData || { annual: [], quarterly: [] };
+  const rows = list => [
+    ['Cash & equivalents', ...list.map(r => fmtMillions(r.cash))],
+    ['Total assets', ...list.map(r => fmtMillions(r.assets))],
+    ['Total debt', ...list.map(r => fmtMillions(r.debt))],
+    ['Shareholders equity', ...list.map(r => fmtMillions(r.equity))],
+  ];
+  if (period === 'quarter') {
+    if (!quarterly.length) return null;
+    return { headers: ['Metric', ...quarterly.map(q => q.label)], rows: rows(quarterly) };
+  }
+  if (period === 'half') {
+    const halves = halfYearly(quarterly);
+    if (!halves.length) return null;
+    return { headers: ['Metric', ...halves.map(h => h.label)], rows: rows(halves) };
+  }
+  if (!annual.length) return null;
+  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: rows(annual) };
+}
+function cashflowRowsFor(period) {
+  const { annual, quarterly } = periodData || { annual: [], quarterly: [] };
+  const rows = list => [
+    ['Cash from operations', ...list.map(r => fmtMillions(r.cfo))],
+    ['Capital expenditure', ...list.map(r => fmtMillions(r.capex))],
+    ['Free cash flow', ...list.map(r => fmtMillions(r.fcf))],
+    ['Dividends paid', ...list.map(r => fmtMillions(r.dividends))],
+  ];
+  if (period === 'quarter') {
+    if (!quarterly.length) return null;
+    return { headers: ['Metric', ...quarterly.map(q => q.label)], rows: rows(quarterly) };
+  }
+  if (period === 'half') {
+    const halves = halfYearly(quarterly);
+    if (!halves.length) return null;
+    return { headers: ['Metric', ...halves.map(h => h.label)], rows: rows(halves) };
+  }
+  if (!annual.length) return null;
+  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: rows(annual) };
+}
+function ratiosRowsFor(period) {
+  const { annual, quarterly, ratios, quarterly_ratios } = periodData || { annual: [], quarterly: [], ratios: [], quarterly_ratios: [] };
+  const rows = list => [
+    ['Return on equity', ...list.map(r => fmtPct(r.roe))],
+    ['Return on capital employed', ...list.map(r => fmtPct(r.roce))],
+    ['Operating margin', ...list.map(r => fmtPct(r.opm))],
+    ['Net margin', ...list.map(r => fmtPct(r.net_margin))],
+    ['Debt / equity', ...list.map(r => fmtNum(r.debt_equity))],
+    ['Current ratio', ...list.map(r => fmtNum(r.current_ratio))],
+    ['Asset turnover', ...list.map(r => fmtNum(r.asset_turnover))],
+    ['Debtor days', ...list.map(r => fmtDays(r.debtor_days))],
+    ['Inventory days', ...list.map(r => fmtDays(r.inventory_days))],
+  ];
+  if (period === 'quarter') {
+    if (!quarterly_ratios.length) return null;
+    return { headers: ['Ratio', ...quarterly_ratios.map(r => r.label)], rows: rows(quarterly_ratios) };
+  }
+  if (period === 'half') {
+    const halves = halfYearlyRatios(halfYearly(quarterly));
+    if (!halves.length) return null;
+    return { headers: ['Ratio', ...halves.map(h => h.label)], rows: rows(halves) };
+  }
+  if (!annual.length) return null;
+  const built = rows(ratios);
+  // Advertising expense only shows for filers that break it out in
+  // their 10-K; the rest get no row, never a made-up number. Quarterly
+  // advertising is not reported, so the row is yearly only.
+  if (ratios.some(r => r.ad_pct != null)) built.push(['Ad spend / revenue', ...ratios.map(r => fmtPct(r.ad_pct))]);
+  return { headers: ['Ratio', ...annual.map(r => `FY${r.fy}`)], rows: built };
+}
+function renderPeriodSection(period, tableId, switchId, eyebrowId, subtitleId, copy, rowsFor) {
+  const [eyebrow, subtitle] = copy[period];
+  const eyebrowEl = document.querySelector(`#${eyebrowId}`);
+  const subtitleEl = document.querySelector(`#${subtitleId}`);
+  if (eyebrowEl) eyebrowEl.textContent = eyebrow;
+  if (subtitleEl) subtitleEl.textContent = subtitle;
+  const built = rowsFor(period);
+  if (built) table(tableId, built.headers, built.rows);
+  else emptyTable(tableId, [tableId === 'ratiosTable' ? 'Ratio' : 'Metric'], period === 'yearly' ? 'No 10-K annuals filed yet for this company, so the ten-year history is not available.' : 'No complete periods reported for this company yet.');
+  document.querySelectorAll(`#${switchId} button`).forEach(btn => btn.classList.toggle('selected', btn.dataset.period === period));
+}
+function renderBalance(period) {
+  renderPeriodSection(period, 'balanceTable', 'balancePeriodSwitch', 'balanceEyebrow', 'balanceSubtitle', {
+    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions.'],
+    half: ['HALF-YEARLY', 'Half-end balances from reported quarters, in USD millions. Only halves with both quarters reported are shown.'],
+    quarter: ['LAST 12 QUARTERS', 'Quarter-end balances, in USD millions.'],
+  }, balanceRowsFor);
+}
+function renderCashflow(period) {
+  renderPeriodSection(period, 'cashflowTable', 'cashflowPeriodSwitch', 'cashflowEyebrow', 'cashflowSubtitle', {
+    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions.'],
+    half: ['HALF-YEARLY', 'Half-year totals derived from reported quarters, in USD millions. Only halves with both quarters reported are shown.'],
+    quarter: ['LAST 12 QUARTERS', 'Quarter-by-quarter cash flow, in USD millions.'],
+  }, cashflowRowsFor);
+}
+function renderRatios(period) {
+  renderPeriodSection(period, 'ratiosTable', 'ratiosPeriodSwitch', 'ratiosEyebrow', 'ratiosSubtitle', {
+    yearly: ['ANNUAL HISTORY', 'Efficiency, leverage, and returns across the last ten years.'],
+    half: ['HALF-YEARLY', 'Half-year ratios from half-yearly flows and half-end balances. Returns and turnover use trailing flows (the current half plus the preceding half).'],
+    quarter: ['LAST 12 QUARTERS', 'Quarterly ratios. Returns and turnover use trailing-twelve-month flows over the quarter-end balance.'],
+  }, ratiosRowsFor);
+}
 function renderFinancials(data) {
   const m = data.metrics || {};
   const annual = data.annual || [];
@@ -197,37 +346,12 @@ function renderFinancials(data) {
     emptyTable('quarterlyTable', ['Metric'], 'No quarterly filings reported for this company yet.');
   }
 
-  const years = annual.map(r => `FY${r.fy}`);
   profitData = { annual, quarterly };
   renderProfit('yearly');
-  if (annual.length) {
-    table('balanceTable', ['Metric', ...years],
-      [['Cash & equivalents', ...annual.map(r => fmtMillions(r.cash))],
-       ['Total assets', ...annual.map(r => fmtMillions(r.assets))],
-       ['Total debt', ...annual.map(r => fmtMillions(r.debt))],
-       ['Shareholders equity', ...annual.map(r => fmtMillions(r.equity))]]);
-    table('cashflowTable', ['Metric', ...years],
-      [['Cash from operations', ...annual.map(r => fmtMillions(r.cfo))],
-       ['Capital expenditure', ...annual.map(r => fmtMillions(r.capex))],
-       ['Free cash flow', ...annual.map(r => fmtMillions(r.fcf))],
-       ['Dividends paid', ...annual.map(r => fmtMillions(r.dividends))]]);
-    table('ratiosTable', ['Ratio', ...years],
-      [['Return on equity', ...ratios.map(r => fmtPct(r.roe))],
-       ['Return on capital employed', ...ratios.map(r => fmtPct(r.roce))],
-       ['Operating margin', ...ratios.map(r => fmtPct(r.opm))],
-       ['Net margin', ...ratios.map(r => fmtPct(r.net_margin))],
-       ['Debt / equity', ...ratios.map(r => fmtNum(r.debt_equity))],
-       ['Current ratio', ...ratios.map(r => fmtNum(r.current_ratio))],
-       ['Asset turnover', ...ratios.map(r => fmtNum(r.asset_turnover))],
-       ['Debtor days', ...ratios.map(r => fmtDays(r.debtor_days))],
-       ['Inventory days', ...ratios.map(r => fmtDays(r.inventory_days))],
-       ...(ratios.some(r => r.ad_pct != null) ? [['Ad spend / revenue', ...ratios.map(r => fmtPct(r.ad_pct))]] : [])]);
-  } else {
-    const note = 'No 10-K annuals filed yet for this company, so the ten-year history is not available.';
-    emptyTable('balanceTable', ['Metric'], note);
-    emptyTable('cashflowTable', ['Metric'], note);
-    emptyTable('ratiosTable', ['Ratio'], note);
-  }
+  periodData = { annual, quarterly, ratios, quarterly_ratios: data.quarterly_ratios || [] };
+  renderBalance('yearly');
+  renderCashflow('yearly');
+  renderRatios('yearly');
   loadShareholding(data.symbol);
 }
 
@@ -261,6 +385,7 @@ function renderSnapshot(profile, data) {
 }
 function renderFinancialsUnavailable(message) {
   profitData = null;
+  periodData = null;
   const notesBox = document.querySelector('#dataNotes');
   if (notesBox) { notesBox.hidden = true; const notesList = document.querySelector('#dataNotesList'); if (notesList) notesList.innerHTML = ''; }
   ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable', 'shareholdingTable'].forEach(id => {
@@ -346,3 +471,6 @@ window.openProfile = async function(symbol) {
 document.querySelector('#backToScreener').addEventListener('click', () => { stopProfileRefresh(); profileMain.hidden = true; document.querySelector('#screenerMain').hidden = false; });
 document.querySelector('#rangeSwitch').addEventListener('click', event => { const button = event.target.closest('[data-range]'); if (!button) return; profileRange = button.dataset.range; document.querySelectorAll('#rangeSwitch button').forEach(item => item.classList.toggle('selected', item === button)); loadChart(button.dataset.range); });
 document.querySelector('#profitPeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !profitData) return; renderProfit(button.dataset.period); });
+document.querySelector('#balancePeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !periodData) return; renderBalance(button.dataset.period); });
+document.querySelector('#cashflowPeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !periodData) return; renderCashflow(button.dataset.period); });
+document.querySelector('#ratiosPeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !periodData) return; renderRatios(button.dataset.period); });

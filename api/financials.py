@@ -117,6 +117,7 @@ def _get_financials_live(symbol):
         "annual": stmts["annual"],
         "quarterly": stmts["quarterly"],
         "ratios": stmts["ratios"],
+        "quarterly_ratios": stmts["quarterly_ratios"],
         "peers": peers,
         "pros": pc["pros"],
         "cons": pc["cons"],

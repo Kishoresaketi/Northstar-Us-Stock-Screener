@@ -14,6 +14,15 @@ Data notes (learned the hard way, 2026-11-16):
 - Quarterly income-statement points include year-to-date values with an
   empty or YTD frame; only points whose frame is a real calendar quarter
   (e.g. CY2025Q1, no YTD) are the quarter's own numbers.
+- Cash-flow concepts are different: a 10-Q's cash-flow statement is
+  year-to-date only, so there is no 3-month cash-flow figure to pick —
+  the quarterly value must be derived by differencing the YTD series
+  (Q2 = YTD(Q2) - YTD(Q1), Q4 = FY - YTD(Q3)). Verified on Apple:
+  Q2 FY2025 capex reads 6,011 = the 6-month total, not the quarter.
+- Balance-sheet concepts are point-in-time: a 10-Q's balance sheet is
+  the quarter-end balance, never a sum. A 10-Q's comparative column
+  carries the prior year-end balance under the filing's own fp, so
+  quarter points are keyed by end date and year-ends are Q4.
 """
 
 import gzip
@@ -483,6 +492,241 @@ def _quarterly_series(facts, concept, fallbacks=(), prefer=None):
     return out
 
 
+
+def _prev_q(fy, fp):
+    """The quarter before (fy, fp), for TTM windows."""
+    if fp == "Q1":
+        return (fy - 1, "Q4")
+    return (fy, "Q%d" % (int(fp[1]) - 1))
+
+
+def _ttm_at(qmap, fy, fp, n=4):
+    """Sum of the last n consecutive quarters ending at (fy, fp).
+
+    Returns None unless all n quarters are present with values — a
+    missing quarter makes the trailing figure unknown, never estimated.
+    """
+    total = 0
+    cur = (fy, fp)
+    for _ in range(n):
+        v = qmap.get(cur)
+        if v is None:
+            return None
+        total += v
+        cur = _prev_q(*cur)
+    return total
+
+
+def _stock_points(facts, concept):
+    """{end: point} quarter-end balances for an instant concept.
+
+    Only 10-Q points (fp Q1/Q2/Q3): a 10-Q's balance sheet is the
+    quarter-end balance. The VALUE comes from the latest filing per
+    end (restatements win), but the fp comes from the EARLIEST filing
+    for that end: a later 10-Q's comparative columns carry the filing's
+    own fp — Apple's Dec 2024 equity is reported by the Q2 FY2026
+    10-Q as fp Q2, although it is the Q1 FY2025 balance. The earliest
+    filing for an end is the quarter's own 10-Q, whose fp names the
+    quarter correctly.
+    """
+    by_end = {}
+    for p in _points(facts, concept):
+        if p["form"] != "10-Q" or p["fp"] not in ("Q1", "Q2", "Q3"):
+            continue
+        key = p["end"]
+        cur = by_end.get(key)
+        if cur is None:
+            by_end[key] = {"latest": p, "earliest": p}
+        else:
+            if (p["filed"], p["accn"]) > (cur["latest"]["filed"], cur["latest"]["accn"]):
+                cur["latest"] = p
+            if (p["filed"], p["accn"]) < (cur["earliest"]["filed"], cur["earliest"]["accn"]):
+                cur["earliest"] = p
+    out = {}
+    for end, cur in by_end.items():
+        p = dict(cur["latest"])
+        p["fp"] = cur["earliest"]["fp"]
+        out[end] = p
+    return out
+
+
+def _quarterly_stock_series(facts, concepts, annual_by_year=None):
+    """Quarter-end balances {(fy, fp): val} for an instant concept.
+
+    Q1-Q3 are the 10-Q quarter-end balances; Q4 is the annual year-end
+    balance. Points are grouped into fiscal years by their end dates
+    against the concept's 10-K year-ends, and labelled by the filing's
+    fp — never by summing, and never by trusting a comparative column's
+    fp (a 10-Q's comparative column carries the prior year-end balance
+    under the filing's own fp, but its end is a year-end, so it lands
+    as Q4). If annual_by_year is given, its values win for Q4, so the
+    quarterly Q4 always matches the annual table.
+    """
+    annual_by_year = annual_by_year or {}
+    by_concept = {}
+    for concept in concepts:
+        pts = _stock_points(facts, concept)
+        annual = _annual(facts, concept)
+        if pts or annual:
+            latest = max([p["end"] for p in pts.values()] + [p["end"] for p in annual] + [""])
+            by_concept[concept] = (pts, annual, latest)
+    if not by_concept:
+        return {}
+    chosen = max(by_concept, key=lambda c: by_concept[c][2])
+    qpts, annual, _latest = by_concept[chosen]
+    # Year-ends across all candidate concepts: boundaries must be
+    # complete even if the chosen concept went stale for a year the
+    # annual table filled from another concept.
+    year_ends = sorted({p["end"] for concept in concepts for p in _annual(facts, concept)})
+    out = {}
+    prev_end = None
+    for end in year_ends:
+        fy = int(end[:4])
+        qs = [p for p in qpts.values() if (prev_end is None or p["end"] > prev_end) and p["end"] < end]
+        for p in qs:
+            out[(fy, p["fp"])] = p["val"]
+        val = annual_by_year.get(fy)
+        if val is None:
+            match = [p for p in annual if p["end"] == end]
+            if match:
+                val = match[0]["val"]
+        if val is not None:
+            out[(fy, "Q4")] = val
+        prev_end = end
+    last_fy = int(year_ends[-1][:4]) if year_ends else 0
+    for p in sorted(qpts.values(), key=lambda p: p["end"]):
+        if prev_end is None or p["end"] > prev_end:
+            fy = last_fy + 1 if year_ends else int(p["end"][:4]) + (1 if int(p["end"][5:7]) >= 10 else 0)
+            out[(fy, p["fp"])] = p["val"]
+    return out
+
+
+def _quarterly_debt_series(facts, annual_debt_by_year):
+    """Quarter-end total debt, mirroring _debt_by_end annually.
+
+    The Debt concept first; if it has no quarterly points, the
+    components (long-term, current, leases, short-term borrowings)
+    are summed per quarter, with a missing component treated as zero
+    only when at least one component is present — as annually.
+    """
+    series = _quarterly_stock_series(facts, ["Debt"], annual_debt_by_year)
+    if series:
+        return series
+    comps = [_quarterly_stock_series(facts, [c])
+             for c in ("LongTermDebt", "LongTermDebtCurrent",
+                       "LongTermDebtAndCapitalLeaseObligations", "ShortTermBorrowings")]
+    keys = set().union(*[set(c) for c in comps]) if comps else set()
+    out = {}
+    for k in keys:
+        vals = [c.get(k) for c in comps]
+        if all(v is None for v in vals):
+            continue
+        out[k] = sum(v or 0 for v in vals)
+    for fy, val in annual_debt_by_year.items():
+        out[(fy, "Q4")] = val
+    return out
+
+
+def _ytd_points(facts, concept):
+    """{end: val} cumulative values for a cash-flow concept.
+
+    10-Q points (fp Q1/Q2/Q3) are the year-to-date figures at the
+    quarter end; 10-K points (fp FY) are the full-year figures.
+    Latest filing wins per end (restatements).
+    """
+    by_end = {}
+    for p in _points(facts, concept):
+        if p["form"] == "10-Q" and p["fp"] in ("Q1", "Q2", "Q3"):
+            pass
+        elif p["form"] == "10-K" and p["fp"] == "FY":
+            pass
+        else:
+            continue
+        key = p["end"]
+        if key not in by_end or (p["filed"], p["accn"]) > (by_end[key]["filed"], by_end[key]["accn"]):
+            by_end[key] = p
+    return by_end
+
+
+def _quarterly_flow_ytd_series(facts, concepts, annual_by_year=None, non_negative=False):
+    """Quarterly values {(fy, fp): val} for a cash-flow concept.
+
+    10-Q cash-flow statements report year-to-date figures, never
+    3-month figures, so the quarter's own value is derived by
+    differencing: Q1 = YTD(Q1), Q2 = YTD(Q2) - YTD(Q1),
+    Q3 = YTD(Q3) - YTD(Q2), Q4 = FY - YTD(Q3). The FY anchor comes
+    from annual_by_year when given, so the four quarters sum to the
+    annual figure by construction. A quarter whose inputs are missing
+    is None, never estimated. When non_negative is set (capex,
+    dividends — payments cannot be negative), a derived value below
+    zero is a restatement artefact and becomes None; operating cash
+    flow may genuinely be negative and is kept as derived.
+    """
+    annual_by_year = annual_by_year or {}
+    by_concept = {}
+    for concept in concepts:
+        pts = _ytd_points(facts, concept)
+        if pts:
+            by_concept[concept] = pts
+    if not by_concept:
+        return {}
+    chosen = max(by_concept, key=lambda pts: max(pts))
+    ytd = by_concept[chosen]
+    year_ends = sorted({p["end"] for concept in concepts for p in _annual(facts, concept)})
+    out = {}
+    prev_end = None
+    for end in year_ends:
+        fy = int(end[:4])
+        qs = {p["fp"]: p for p in ytd.values()
+              if (prev_end is None or p["end"] > prev_end) and p["end"] <= end}
+        q1 = qs.get("Q1")
+        q2 = qs.get("Q2")
+        q3 = qs.get("Q3")
+        if q1 is not None:
+            out[(fy, "Q1")] = q1["val"]
+        if q2 is not None and q1 is not None:
+            out[(fy, "Q2")] = q2["val"] - q1["val"]
+        if q3 is not None and q2 is not None:
+            out[(fy, "Q3")] = q3["val"] - q2["val"]
+        fy_val = annual_by_year.get(fy)
+        if fy_val is None:
+            fy_pt = ytd.get(end)
+            fy_val = fy_pt["val"] if fy_pt else None
+        if fy_val is not None and q3 is not None:
+            out[(fy, "Q4")] = fy_val - q3["val"]
+        prev_end = end
+    last_fy = int(year_ends[-1][:4]) if year_ends else 0
+    trailing = [p for p in ytd.values() if prev_end is None or p["end"] > prev_end]
+    if trailing:
+        if year_ends:
+            groups = {last_fy + 1: trailing}
+        else:
+            # No 10-K history at all: infer each point's fiscal year
+            # from its end date (an Oct-Dec quarter belongs to the
+            # next fiscal year), and difference within each year.
+            groups = {}
+            for p in trailing:
+                fy = int(p["end"][:4]) + (1 if int(p["end"][5:7]) >= 10 else 0)
+                groups.setdefault(fy, []).append(p)
+        for fy, pts in groups.items():
+            by_fp = {p["fp"]: p for p in pts}
+            q1 = by_fp.get("Q1")
+            q2 = by_fp.get("Q2")
+            q3 = by_fp.get("Q3")
+            if q1 is not None:
+                out[(fy, "Q1")] = q1["val"]
+            if q2 is not None and q1 is not None:
+                out[(fy, "Q2")] = q2["val"] - q1["val"]
+            if q3 is not None and q2 is not None:
+                out[(fy, "Q3")] = q3["val"] - q2["val"]
+    if non_negative:
+        for k, v in list(out.items()):
+            if v is not None and v < 0:
+                out[k] = None
+    return out
+
+
+
 def _ttm(series, n=4):
     if len(series) < n:
         return None
@@ -689,19 +933,92 @@ def statements(symbol):
         })
 
     quarters = []
-    rev_q = _quarterly_series(data, "Revenues", ("SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenuesNetOfInterestExpense"))
-    op_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "OperatingIncomeLoss")}
-    ni_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "NetIncomeLoss", ("ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"), prefer="NetIncomeLossAvailableToCommonStockholdersBasic")}
+    rev_series = _quarterly_series(data, "Revenues", ("SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenuesNetOfInterestExpense"))
+    op_series = _quarterly_series(data, "OperatingIncomeLoss")
+    ni_series = _quarterly_series(data, "NetIncomeLoss", ("ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"), prefer="NetIncomeLossAvailableToCommonStockholdersBasic")
+    cogs_series = _quarterly_series(data, "CostOfRevenue", ("CostOfGoodsAndServicesSold",))
+    rev_q = rev_series
+    op_q = {(p["fy"], p["fp"]): p["val"] for p in op_series}
+    ni_q = {(p["fy"], p["fp"]): p["val"] for p in ni_series}
+    # Quarterly balance sheet: point-in-time quarter-end balances.
+    cash_q = _quarterly_stock_series(data, ["CashAndCashEquivalentsAtCarryingValue"], cash)
+    assets_q = _quarterly_stock_series(data, ["Assets"], assets)
+    equity_q = _quarterly_stock_series(data, ["StockholdersEquity"], equity)
+    debt_q = _quarterly_debt_series(data, debt)
+    curr_assets_q = _quarterly_stock_series(data, ["AssetsCurrent"], curr_assets)
+    curr_liab_q = _quarterly_stock_series(data, ["LiabilitiesCurrent"], curr_liab)
+    receivables_q = _quarterly_stock_series(data, ["AccountsReceivableNetCurrent"], receivables)
+    inventory_q = _quarterly_stock_series(data, ["InventoryNet"], inventory)
+    # Quarterly cash flow: 10-Qs report YTD figures, so the quarter's own
+    # value is derived by differencing (see _quarterly_flow_ytd_series).
+    cfo_q = _quarterly_flow_ytd_series(data, ["NetCashProvidedByOperatingActivities", "NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], cfo)
+    capex_q = _quarterly_flow_ytd_series(data, ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], capex, non_negative=True)
+    dividends_q = _quarterly_flow_ytd_series(data, ["PaymentsOfDividends"], dividends, non_negative=True)
+    # Quarterly cost of revenue: a flow with 3-month figures in 10-Qs,
+    # like revenue — also completes the quarterly P&L and feeds
+    # inventory days.
+    cogs_q = {(p["fy"], p["fp"]): p["val"] for p in cogs_series}
+    rev_full = {(p["fy"], p["fp"]): p["val"] for p in rev_series}
+    op_full = dict(op_q)
+    ni_full = dict(ni_q)
+    cogs_full = dict(cogs_q)
     latest_shares = _latest_shares(data)
-    for p in rev_q[-12:]:
-        ni = ni_q.get((p["fy"], p["fp"]))
+    kept = rev_q[-12:]
+    quarterly_ratios = []
+    for p in kept:
+        key = (p["fy"], p["fp"])
+        rev = p["val"]
+        ebit = op_q.get(key)
+        ni = ni_q.get(key)
+        eq = equity_q.get(key)
+        db = debt_q.get(key)
+        ttm_rev = _ttm_at(rev_full, p["fy"], p["fp"])
+        ttm_ni = _ttm_at(ni_full, p["fy"], p["fp"])
+        ttm_ebit = _ttm_at(op_full, p["fy"], p["fp"])
+        ttm_cogs = _ttm_at(cogs_full, p["fy"], p["fp"])
+        receivables = receivables_q.get(key)
+        inventory = inventory_q.get(key)
+        quarterly_ratios.append({
+            "label": f"{p['fp']} FY{p['fy']}",
+            "opm": (ebit / rev) if ebit is not None and rev else None,
+            "net_margin": (ni / rev) if ni is not None and rev else None,
+            # Returns and turnover use trailing-twelve-month flows over
+            # the quarter-end balance — the same basis as the annual
+            # ratios, so quarterly and yearly figures are comparable.
+            "roe": (ttm_ni / eq) if ttm_ni is not None and eq else None,
+            "roce": (ttm_ebit / (eq + db)) if ttm_ebit is not None and eq and db is not None else None,
+            "debt_equity": (db / eq) if db is not None and eq else None,
+            "current_ratio": (curr_assets_q.get(key) / curr_liab_q.get(key)) if curr_assets_q.get(key) and curr_liab_q.get(key) else None,
+            "asset_turnover": (ttm_rev / assets_q.get(key)) if ttm_rev and assets_q.get(key) else None,
+            "debtor_days": (receivables / ttm_rev * 365) if receivables is not None and ttm_rev else None,
+            "inventory_days": (inventory / ttm_cogs * 365) if inventory is not None and ttm_cogs else None,
+        })
+    for p in kept:
+        key = (p["fy"], p["fp"])
+        ni = ni_q.get(key)
+        cfo = cfo_q.get(key)
+        capex = capex_q.get(key)
         quarters.append({
             "label": f"{p['fp']} FY{p['fy']}",
             "end": p["end"],
             "revenue": p["val"],
-            "operating_income": op_q.get((p["fy"], p["fp"])),
+            "cogs": cogs_q.get(key),
+            "operating_income": op_q.get(key),
             "net_income": ni,
             "eps": (ni / latest_shares) if ni is not None and latest_shares else None,
+            "cash": cash_q.get(key),
+            "assets": assets_q.get(key),
+            "debt": debt_q.get(key),
+            "equity": equity_q.get(key),
+            "curr_assets": curr_assets_q.get(key),
+            "curr_liab": curr_liab_q.get(key),
+            "receivables": receivables_q.get(key),
+            "inventory": inventory_q.get(key),
+            "cfo": cfo,
+            "capex": capex,
+            "fcf": ((cfo or 0) - (capex or 0)) if cfo is not None and capex is not None else None,
+            "dividends": dividends_q.get(key),
         })
 
-    return {"annual": annual_rows, "quarterly": quarters, "ratios": ratio_rows}
+    return {"annual": annual_rows, "quarterly": quarters, "ratios": ratio_rows,
+            "quarterly_ratios": quarterly_ratios}
