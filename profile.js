@@ -104,6 +104,75 @@ function renderDataNotes(data) {
   box.hidden = !notes.length;
   if (notes.length) lucide.createIcons();
 }
+function halfYearly(quarterly) {
+  // Half-year totals derived from reported quarters: H1 = Q1+Q2, H2 = Q3+Q4.
+  // Only halves with both quarters reported are shown; a half with a
+  // missing quarter is skipped, never estimated. EPS sums the quarters.
+  const byFy = {};
+  for (const q of quarterly || []) {
+    const m = /^Q([1-4]) FY(\d{4})$/.exec(q.label || '');
+    if (!m) continue;
+    (byFy[m[2]] = byFy[m[2]] || {})[Number(m[1])] = q;
+  }
+  const halves = [];
+  for (const fy of Object.keys(byFy).sort()) {
+    for (const [half, qs] of [['H1', [1, 2]], ['H2', [3, 4]]]) {
+      const a = byFy[fy][qs[0]];
+      const b = byFy[fy][qs[1]];
+      if (!a || !b) continue;
+      const sum = field => (a[field] != null && b[field] != null) ? a[field] + b[field] : null;
+      halves.push({ label: `${half} FY${fy}`, revenue: sum('revenue'), operating_income: sum('operating_income'), net_income: sum('net_income'), eps: sum('eps') });
+    }
+  }
+  return halves;
+}
+let profitData = null;
+function profitRowsFor(period) {
+  const { annual, quarterly } = profitData || { annual: [], quarterly: [] };
+  if (period === 'quarter') {
+    if (!quarterly.length) return null;
+    return { headers: ['Metric', ...quarterly.map(q => q.label)], rows: [
+      ['Revenue', ...quarterly.map(q => fmtMillions(q.revenue))],
+      ['Operating income', ...quarterly.map(q => fmtMillions(q.operating_income))],
+      ['Net income', ...quarterly.map(q => fmtMillions(q.net_income))],
+      ['EPS diluted', ...quarterly.map(q => fmtDollars(q.eps))],
+      ['Operating margin', ...quarterly.map(q => (q.operating_income != null && q.revenue) ? fmtPct(q.operating_income / q.revenue) : '—')]] };
+  }
+  if (period === 'half') {
+    const halves = halfYearly(quarterly);
+    if (!halves.length) return null;
+    return { headers: ['Metric', ...halves.map(h => h.label)], rows: [
+      ['Revenue', ...halves.map(h => fmtMillions(h.revenue))],
+      ['Operating income', ...halves.map(h => fmtMillions(h.operating_income))],
+      ['Net income', ...halves.map(h => fmtMillions(h.net_income))],
+      ['EPS diluted', ...halves.map(h => fmtDollars(h.eps))],
+      ['Operating margin', ...halves.map(h => (h.operating_income != null && h.revenue) ? fmtPct(h.operating_income / h.revenue) : '—')]] };
+  }
+  if (!annual.length) return null;
+  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: [
+    ['Revenue', ...annual.map(r => fmtMillions(r.revenue))],
+    ...(annual.some(r => r.cogs != null) ? [['Cost of revenue', ...annual.map(r => fmtMillions(r.cogs))]] : []),
+    ['Operating income', ...annual.map(r => fmtMillions(r.operating_income))],
+    ['Net income', ...annual.map(r => fmtMillions(r.net_income))],
+    ['EPS diluted', ...annual.map(r => fmtDollars(r.eps))],
+    ...(annual.some(r => r.advertising != null) ? [['Advertising expense', ...annual.map(r => fmtMillions(r.advertising))]] : []),
+  ]};
+}
+function renderProfit(period) {
+  const copy = {
+    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions.'],
+    half: ['HALF-YEARLY', 'Half-year totals derived from reported quarters, in USD millions. Only halves with both quarters reported are shown.'],
+    quarter: ['LAST 12 QUARTERS', 'Quarter-by-quarter operating performance, in USD millions.'],
+  }[period];
+  const eyebrow = document.querySelector('#profitEyebrow');
+  const subtitle = document.querySelector('#profitSubtitle');
+  if (eyebrow) eyebrow.textContent = copy[0];
+  if (subtitle) subtitle.textContent = copy[1];
+  const built = profitRowsFor(period);
+  if (built) table('profitTable', built.headers, built.rows);
+  else emptyTable('profitTable', ['Metric'], period === 'yearly' ? 'No 10-K annuals filed yet for this company, so the ten-year history is not available.' : 'No complete periods reported for this company yet.');
+  document.querySelectorAll('#profitPeriodSwitch button').forEach(btn => btn.classList.toggle('selected', btn.dataset.period === period));
+}
 function renderFinancials(data) {
   const m = data.metrics || {};
   const annual = data.annual || [];
@@ -129,18 +198,9 @@ function renderFinancials(data) {
   }
 
   const years = annual.map(r => `FY${r.fy}`);
+  profitData = { annual, quarterly };
+  renderProfit('yearly');
   if (annual.length) {
-    const profitRows = [
-      ['Revenue', ...annual.map(r => fmtMillions(r.revenue))],
-      ...(annual.some(r => r.cogs != null) ? [['Cost of revenue', ...annual.map(r => fmtMillions(r.cogs))]] : []),
-      ['Operating income', ...annual.map(r => fmtMillions(r.operating_income))],
-      ['Net income', ...annual.map(r => fmtMillions(r.net_income))],
-      ['EPS diluted', ...annual.map(r => fmtDollars(r.eps))],
-      // Advertising expense only shows for filers that break it out in
-      // their 10-K (165 of 517); the rest get no row, never a made-up number.
-      ...(annual.some(r => r.advertising != null) ? [['Advertising expense', ...annual.map(r => fmtMillions(r.advertising))]] : []),
-    ];
-    table('profitTable', ['Metric', ...years], profitRows);
     table('balanceTable', ['Metric', ...years],
       [['Cash & equivalents', ...annual.map(r => fmtMillions(r.cash))],
        ['Total assets', ...annual.map(r => fmtMillions(r.assets))],
@@ -164,7 +224,6 @@ function renderFinancials(data) {
        ...(ratios.some(r => r.ad_pct != null) ? [['Ad spend / revenue', ...ratios.map(r => fmtPct(r.ad_pct))]] : [])]);
   } else {
     const note = 'No 10-K annuals filed yet for this company, so the ten-year history is not available.';
-    emptyTable('profitTable', ['Metric'], note);
     emptyTable('balanceTable', ['Metric'], note);
     emptyTable('cashflowTable', ['Metric'], note);
     emptyTable('ratiosTable', ['Ratio'], note);
@@ -201,6 +260,7 @@ function renderSnapshot(profile, data) {
   lucide.createIcons();
 }
 function renderFinancialsUnavailable(message) {
+  profitData = null;
   const notesBox = document.querySelector('#dataNotes');
   if (notesBox) { notesBox.hidden = true; const notesList = document.querySelector('#dataNotesList'); if (notesList) notesList.innerHTML = ''; }
   ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable', 'shareholdingTable'].forEach(id => {
@@ -260,7 +320,7 @@ window.openProfile = async function(symbol) {
   renderFinancialsUnavailable('Loading filings…');
   renderSnapshot(profile, null);
   profileRange = '1y';
-  document.querySelectorAll('.range-switch button').forEach(button => button.classList.toggle('selected', button.dataset.range === '1y'));
+  document.querySelectorAll('#rangeSwitch button').forEach(button => button.classList.toggle('selected', button.dataset.range === '1y'));
   loadChart('1y');
   startProfileRefresh();
   try {
@@ -284,4 +344,5 @@ window.openProfile = async function(symbol) {
   window.scrollTo(0, 0);
 };
 document.querySelector('#backToScreener').addEventListener('click', () => { stopProfileRefresh(); profileMain.hidden = true; document.querySelector('#screenerMain').hidden = false; });
-document.querySelector('#rangeSwitch').addEventListener('click', event => { const button = event.target.closest('[data-range]'); if (!button) return; profileRange = button.dataset.range; document.querySelectorAll('.range-switch button').forEach(item => item.classList.toggle('selected', item === button)); loadChart(button.dataset.range); });
+document.querySelector('#rangeSwitch').addEventListener('click', event => { const button = event.target.closest('[data-range]'); if (!button) return; profileRange = button.dataset.range; document.querySelectorAll('#rangeSwitch button').forEach(item => item.classList.toggle('selected', item === button)); loadChart(button.dataset.range); });
+document.querySelector('#profitPeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !profitData) return; renderProfit(button.dataset.period); });
