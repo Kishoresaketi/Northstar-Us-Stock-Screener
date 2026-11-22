@@ -58,6 +58,40 @@ async function loadShareholding(symbol) {
     emptyTable('shareholdingTable', ['Holder', 'Share'], 'Shareholding data is still being built — check back soon.');
   }
 }
+// SEC Documents: filing indexes on EDGAR, built from the company's CIK
+// (data/cik-map.json, built from the SEC company_tickers list). The
+// 10-digit zero-padded CIK is what the classic browse-edgar URLs take;
+// the modern browse page takes the plain number.
+let cikMapData = null;
+let cikMapLoaded = false;
+function edgarLinks(cik) {
+  const padded = String(cik).padStart(10, '0');
+  const base = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany';
+  return [
+    ['10-K filings', `${base}&CIK=${padded}&type=10-K&dateb=&owner=include&count=10`],
+    ['10-Q filings', `${base}&CIK=${padded}&type=10-Q&dateb=&owner=include&count=10`],
+    ['All filings', `https://www.sec.gov/edgar/browse/?CIK=${cik}`],
+  ];
+}
+async function loadDocuments(symbol) {
+  try {
+    if (!cikMapLoaded) {
+      const response = await fetch('data/cik-map.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error('CIK map unavailable');
+      cikMapData = await response.json();
+      cikMapLoaded = true;
+    }
+    const entry = cikMapData && cikMapData[symbol];
+    if (!entry || !entry.cik) {
+      emptyTable('documentsTable', ['Document', 'EDGAR'], 'No SEC filing index is available for this ticker.');
+      return;
+    }
+    table('documentsTable', ['Document', 'EDGAR'],
+      edgarLinks(entry.cik).map(([label, url]) => [label, `<a href="${url}" target="_blank" rel="noopener">View on EDGAR</a>`]));
+  } catch (error) {
+    emptyTable('documentsTable', ['Document', 'EDGAR'], 'SEC filing links are unavailable right now.');
+  }
+}
 // Data notes: per-company exceptions in the SEC figures, shown directly
 // below the tab bar. Only renders when something is actually off, so
 // clean companies get no block at all.
@@ -109,7 +143,7 @@ function renderDataNotes(data) {
 // reported are shown; a half with a missing quarter is skipped, never
 // estimated. EPS sums the quarters.
 const HALF_FLOW_FIELDS = ['revenue', 'cogs', 'operating_income', 'net_income', 'eps', 'cfo', 'capex', 'fcf', 'dividends'];
-const HALF_STOCK_FIELDS = ['cash', 'assets', 'debt', 'equity', 'curr_assets', 'curr_liab', 'receivables', 'inventory'];
+const HALF_STOCK_FIELDS = ['cash', 'assets', 'debt', 'equity', 'curr_assets', 'curr_liab', 'receivables', 'inventory', 'payables'];
 function halfYearly(quarterly) {
   const byFy = {};
   for (const q of quarterly || []) {
@@ -158,6 +192,10 @@ function halfYearlyRatios(halves) {
     const ttmNi = trailing(h, 'net_income');
     const ttmEbit = trailing(h, 'operating_income');
     const ttmCogs = trailing(h, 'cogs');
+    // Day-count ratios use the same trailing basis as the returns above.
+    const debtor_d = (h.receivables != null && ttmRev) ? h.receivables / ttmRev * 365 : null;
+    const inventory_d = (h.inventory != null && ttmCogs) ? h.inventory / ttmCogs * 365 : null;
+    const payable_d = (h.payables != null && ttmCogs) ? h.payables / ttmCogs * 365 : null;
     return {
       label: h.label,
       opm: (h.operating_income != null && h.revenue) ? h.operating_income / h.revenue : null,
@@ -167,12 +205,43 @@ function halfYearlyRatios(halves) {
       debt_equity: (h.debt != null && h.equity) ? h.debt / h.equity : null,
       current_ratio: (h.curr_assets && h.curr_liab) ? h.curr_assets / h.curr_liab : null,
       asset_turnover: (ttmRev != null && h.assets) ? ttmRev / h.assets : null,
-      debtor_days: (h.receivables != null && ttmRev) ? h.receivables / ttmRev * 365 : null,
-      inventory_days: (h.inventory != null && ttmCogs) ? h.inventory / ttmCogs * 365 : null,
+      debtor_days: debtor_d,
+      inventory_days: inventory_d,
+      payable_days: payable_d,
+      working_capital_days: (h.curr_assets != null && h.curr_liab != null && ttmRev) ? (h.curr_assets - h.curr_liab) / ttmRev * 365 : null,
+      ccc: (debtor_d != null && inventory_d != null && payable_d != null) ? debtor_d + inventory_d - payable_d : null,
     };
   });
 }
 let profitData = null;
+// Trailing twelve months from the last four reported quarters. A figure
+// is null unless all four quarters report it — never estimated from
+// fewer quarters.
+function ttmFor(quarterly) {
+  const last4 = (quarterly || []).slice(-4);
+  if (last4.length < 4) return null;
+  const sum = field => last4.every(q => q[field] != null) ? last4.reduce((a, q) => a + q[field], 0) : null;
+  return { revenue: sum('revenue'), cogs: sum('cogs'), operating_income: sum('operating_income'), net_income: sum('net_income'), eps: sum('eps') };
+}
+// Latest quarter vs the same quarter a year ago (YoY) and vs the prior
+// quarter (QoQ), from reported figures only. A growth figure is null
+// when either side is missing or the base is zero.
+function growthFor(quarterly) {
+  const qs = quarterly || [];
+  if (!qs.length) return null;
+  const latest = qs[qs.length - 1];
+  const prev = qs.length > 1 ? qs[qs.length - 2] : null;
+  const m = /^Q([1-4]) FY(\d{4})$/.exec(latest.label || '');
+  const yearAgo = m ? qs.find(q => q.label === `Q${m[1]} FY${Number(m[2]) - 1}`) : null;
+  const growth = (cur, base) => (cur != null && base != null && base !== 0) ? (cur - base) / base : null;
+  const one = field => ({
+    yoy: yearAgo ? growth(latest[field], yearAgo[field]) : null,
+    qoq: prev ? growth(latest[field], prev[field]) : null,
+    yoyLabel: yearAgo ? `${latest.label} vs ${yearAgo.label}` : null,
+    qoqLabel: prev ? `${latest.label} vs ${prev.label}` : null,
+  });
+  return { latest: latest.label, revenue: one('revenue'), net_income: one('net_income'), eps: one('eps') };
+}
 function profitRowsFor(period) {
   const { annual, quarterly } = profitData || { annual: [], quarterly: [] };
   if (period === 'quarter') {
@@ -195,18 +264,23 @@ function profitRowsFor(period) {
       ['Operating margin', ...halves.map(h => (h.operating_income != null && h.revenue) ? fmtPct(h.operating_income / h.revenue) : '—')]] };
   }
   if (!annual.length) return null;
-  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: [
-    ['Revenue', ...annual.map(r => fmtMillions(r.revenue))],
-    ...(annual.some(r => r.cogs != null) ? [['Cost of revenue', ...annual.map(r => fmtMillions(r.cogs))]] : []),
-    ['Operating income', ...annual.map(r => fmtMillions(r.operating_income))],
-    ['Net income', ...annual.map(r => fmtMillions(r.net_income))],
-    ['EPS diluted', ...annual.map(r => fmtDollars(r.eps))],
-    ...(annual.some(r => r.advertising != null) ? [['Advertising expense', ...annual.map(r => fmtMillions(r.advertising))]] : []),
+  // The TTM column sits alongside the annual columns: the sum of the
+  // last four reported quarters. Quarterly advertising is not reported,
+  // so that cell is always blank.
+  const ttm = ttmFor(quarterly);
+  const ttmVal = field => (ttm ? ttm[field] : null);
+  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`), 'TTM'], rows: [
+    ['Revenue', ...annual.map(r => fmtMillions(r.revenue)), fmtMillions(ttmVal('revenue'))],
+    ...(annual.some(r => r.cogs != null) ? [['Cost of revenue', ...annual.map(r => fmtMillions(r.cogs)), fmtMillions(ttmVal('cogs'))]] : []),
+    ['Operating income', ...annual.map(r => fmtMillions(r.operating_income)), fmtMillions(ttmVal('operating_income'))],
+    ['Net income', ...annual.map(r => fmtMillions(r.net_income)), fmtMillions(ttmVal('net_income'))],
+    ['EPS diluted', ...annual.map(r => fmtDollars(r.eps)), fmtDollars(ttmVal('eps'))],
+    ...(annual.some(r => r.advertising != null) ? [['Advertising expense', ...annual.map(r => fmtMillions(r.advertising)), '—']] : []),
   ]};
 }
 function renderProfit(period) {
   const copy = {
-    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions.'],
+    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions. TTM is the sum of the last four reported quarters.'],
     half: ['HALF-YEARLY', 'Half-year totals derived from reported quarters, in USD millions. Only halves with both quarters reported are shown.'],
     quarter: ['LAST 12 QUARTERS', 'Quarter-by-quarter operating performance, in USD millions.'],
   }[period];
@@ -226,6 +300,7 @@ function balanceRowsFor(period) {
     ['Cash & equivalents', ...list.map(r => fmtMillions(r.cash))],
     ['Total assets', ...list.map(r => fmtMillions(r.assets))],
     ['Total debt', ...list.map(r => fmtMillions(r.debt))],
+    ['Accounts payable', ...list.map(r => fmtMillions(r.payables))],
     ['Shareholders equity', ...list.map(r => fmtMillions(r.equity))],
   ];
   if (period === 'quarter') {
@@ -272,6 +347,9 @@ function ratiosRowsFor(period) {
     ['Asset turnover', ...list.map(r => fmtNum(r.asset_turnover))],
     ['Debtor days', ...list.map(r => fmtDays(r.debtor_days))],
     ['Inventory days', ...list.map(r => fmtDays(r.inventory_days))],
+    ['Days payable', ...list.map(r => fmtDays(r.payable_days))],
+    ['Working capital days', ...list.map(r => fmtDays(r.working_capital_days))],
+    ['Cash conversion cycle', ...list.map(r => fmtDays(r.ccc))],
   ];
   if (period === 'quarter') {
     if (!quarterly_ratios.length) return null;
@@ -322,6 +400,24 @@ function renderRatios(period) {
     quarter: ['LAST 12 QUARTERS', 'Quarterly ratios. Returns and turnover use trailing-twelve-month flows over the quarter-end balance.'],
   }, ratiosRowsFor);
 }
+function renderGrowth(data) {
+  const grid = document.querySelector('#growthGrid');
+  if (!grid) return;
+  const g = data ? growthFor(data.quarterly) : null;
+  if (!g) {
+    grid.innerHTML = '<article class="insight-card"><h3>Growth</h3><p>No quarterly filings reported for this company yet.</p></article>';
+    return;
+  }
+  const line = (label, item, key) => {
+    const value = item[key];
+    const vs = item[key === 'yoy' ? 'yoyLabel' : 'qoqLabel'];
+    if (value == null) return `${label}: —${vs ? ` (${vs})` : ''}`;
+    return `${label}: ${fmtSignedPct(value)} (${vs})`;
+  };
+  const card = (title, item) => `<article class="insight-card"><i data-lucide="trending-up"></i><h3>${title}</h3><p>${line('Year over year', item, 'yoy')}<br>${line('Prior quarter', item, 'qoq')}</p></article>`;
+  grid.innerHTML = card('Revenue', g.revenue) + card('Net income', g.net_income) + card('EPS diluted', g.eps);
+  lucide.createIcons();
+}
 function renderFinancials(data) {
   const m = data.metrics || {};
   const annual = data.annual || [];
@@ -352,7 +448,9 @@ function renderFinancials(data) {
   renderBalance('yearly');
   renderCashflow('yearly');
   renderRatios('yearly');
+  renderGrowth(data);
   loadShareholding(data.symbol);
+  loadDocuments(data.symbol);
 }
 
 function renderSnapshot(profile, data) {
@@ -370,7 +468,7 @@ function renderSnapshot(profile, data) {
   const m = data ? (data.metrics || {}) : {};
   const annual = data ? (data.annual || []) : [];
   const latest = annual.length ? annual[annual.length - 1] : null;
-  document.querySelector('#keyMetrics').innerHTML = [['Market cap', fmtCap(m.cap)], ['P/E ratio', fmtNum(m.pe, 1)], ['ROE', fmtPct(m.roe)], ['Debt / equity', fmtNum(m.debt_equity)], ['EPS (TTM)', fmtDollars(m.eps_ttm)], ['52W range', '<span id="metric52w">—</span>']].map(([name, value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
+  document.querySelector('#keyMetrics').innerHTML = [['Market cap', fmtCap(m.cap)], ['P/E ratio', fmtNum(m.pe, 1)], ['ROE', fmtPct(m.roe)], ['Debt / equity', fmtNum(m.debt_equity)], ['EPS (TTM)', fmtDollars(m.eps_ttm)], ['52W range', '<span id="metric52w">—</span>'], ['50-day avg', `<span id="metricMA50">${ma50Value != null ? fmtDollars(ma50Value) : '—'}</span>`], ['200-day avg', `<span id="metricMA200">${ma200Value != null ? fmtDollars(ma200Value) : '—'}</span>`]].map(([name, value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
   const growthCard = m.growth == null
     ? ['Revenue trend', 'Trailing revenue growth is not available from the company filings.', 'trending-up']
     : ['Revenue trend', m.growth >= 0 ? `Revenue grew ${fmtPct(m.growth)} over the last twelve months.` : `Revenue was down ${fmtPct(Math.abs(m.growth))} over the last twelve months.`, 'trending-up'];
@@ -388,7 +486,9 @@ function renderFinancialsUnavailable(message) {
   periodData = null;
   const notesBox = document.querySelector('#dataNotes');
   if (notesBox) { notesBox.hidden = true; const notesList = document.querySelector('#dataNotesList'); if (notesList) notesList.innerHTML = ''; }
-  ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable', 'shareholdingTable'].forEach(id => {
+  const growthGrid = document.querySelector('#growthGrid');
+  if (growthGrid) growthGrid.innerHTML = `<article class="insight-card"><h3>Growth</h3><p>${message}</p></article>`;
+  ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable', 'shareholdingTable', 'documentsTable'].forEach(id => {
     const el = document.querySelector(`#${id}`);
     if (el) el.innerHTML = `<tbody><tr><td>${message}</td></tr></tbody>`;
   });
@@ -405,11 +505,81 @@ async function loadChart(range) {
     }
     const values = points.map(point => Array.isArray(point) ? point[1] : point.close); const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(max - min, 1);
     const coords = values.map((value, index) => `${(index / Math.max(values.length - 1, 1) * 1000).toFixed(2)},${(282 - ((value - min) / span * 242)).toFixed(2)}`);
-    svg.innerHTML = `<path class="area" d="M0,300 L${coords.join(' L')} L1000,300 Z"></path><path class="line" d="M${coords.join(' L')}"></path>`;
+    // Moving averages: only daily series support day-based averages, so
+    // they are drawn and valued from daily closes (1mo/6mo/1y/3y). The
+    // 5y/max files are weekly/monthly points and get no average lines.
+    // The values in At a glance always come from the daily series, so
+    // switching the chart range never changes what they mean.
+    const daily = isDailySeries(points);
+    const ma50 = daily ? movingAverageSeries(values, 50) : [];
+    const ma200 = daily ? movingAverageSeries(values, 200) : [];
+    if (daily) {
+      const last50 = movingAverage(values, 50);
+      const last200 = movingAverage(values, 200);
+      if (last50 != null) ma50Value = last50;
+      if (last200 != null) ma200Value = last200;
+      fillMovingAverages();
+    }
+    const maPath = (series, cls) => {
+      const pts = [];
+      series.forEach((v, i) => {
+        if (v == null) return;
+        pts.push(`${(i / Math.max(values.length - 1, 1) * 1000).toFixed(2)},${(282 - ((v - min) / span * 242)).toFixed(2)}`);
+      });
+      return pts.length ? `<path class="${cls}" d="M${pts.join(' L')}"></path>` : '';
+    };
+    svg.innerHTML = `<path class="area" d="M0,300 L${coords.join(' L')} L1000,300 Z"></path><path class="line" d="M${coords.join(' L')}"></path>${maPath(ma50, 'ma50')}${maPath(ma200, 'ma200')}`;
+    const legend = document.querySelector('#chartLegend');
+    if (legend) {
+      const show50 = ma50.some(v => v != null);
+      const show200 = ma200.some(v => v != null);
+      legend.hidden = !(show50 || show200);
+      const l50 = legend.querySelector('.legend-ma50');
+      const l200 = legend.querySelector('.legend-ma200');
+      if (l50) l50.hidden = !show50;
+      if (l200) l200.hidden = !show200;
+    }
     loading.hidden = true;
   } catch (error) {
     loading.textContent = 'Price history unavailable right now.';
   }
+}
+// 50/200-day moving averages of the share price. A value is the mean of
+// the last `window` closes, and null when the series is shorter than
+// the window — never a partial average over fewer days.
+let ma50Value = null;
+let ma200Value = null;
+function movingAverage(values, window) {
+  if (!values || values.length < window) return null;
+  let sum = 0;
+  for (let i = values.length - window; i < values.length; i++) sum += values[i];
+  return sum / window;
+}
+function movingAverageSeries(values, window) {
+  if (!values) return [];
+  const out = new Array(values.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= window) sum -= values[i - window];
+    if (i >= window - 1) out[i] = sum / window;
+  }
+  return out;
+}
+function isDailySeries(points) {
+  // Daily closes are ~1 day apart; weekly/monthly series are ~7/30.
+  // The median gap decides, so a holiday gap or two cannot flip it.
+  if (!points || points.length < 2) return false;
+  const gaps = [];
+  for (let i = 1; i < points.length; i++) gaps.push(points[i][0] - points[i - 1][0]);
+  gaps.sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)] < 2.5 * 86400;
+}
+function fillMovingAverages() {
+  const ma50 = document.querySelector('#metricMA50');
+  if (ma50) ma50.textContent = fmtDollars(ma50Value);
+  const ma200 = document.querySelector('#metricMA200');
+  if (ma200) ma200.textContent = fmtDollars(ma200Value);
 }
 async function refreshProfileQuote() {
   try {
@@ -438,7 +608,7 @@ function stopProfileRefresh() {
   if (profileTimer) { clearInterval(profileTimer); profileTimer = null; }
 }
 window.openProfile = async function(symbol) {
-  profileSymbol = symbol; const profile = profileFor(symbol); const stock = stocks.find(item => item.ticker === symbol);
+  profileSymbol = symbol; ma50Value = null; ma200Value = null; const profile = profileFor(symbol); const stock = stocks.find(item => item.ticker === symbol);
   document.querySelector('#screenerMain').hidden = true; document.querySelector('#detailDrawer').classList.remove('open'); document.querySelector('#scrim').classList.remove('open'); profileMain.hidden = false;
   profileInitial.textContent = symbol[0]; profileName.textContent = profile.name; profileTicker.textContent = `${symbol} · ${profile.sector}`; chartTitle.textContent = `${symbol} share price`;
   if (stock) { profilePrice.textContent = stock.price; profileChange.textContent = stock.change; profileChange.className = stock.change.startsWith('-') ? 'negative' : 'positive'; }

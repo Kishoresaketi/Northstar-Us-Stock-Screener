@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Rebuild data/financials/*.json with the quarterly balance sheet,
-cash flow, and ratio fields added by the chunk-2 pipeline change.
+"""Rebuild data/financials/*.json with the Screener.in additions: the
+accounts-payable field plus the days-payable, working-capital-days
+and cash-conversion-cycle ratios added by the pipeline change.
 
 Only the statements keys are replaced (annual / quarterly / ratios /
 quarterly_ratios); price, metrics, peers, pros, cons, asOf and source
@@ -12,10 +13,11 @@ Usage:
     python3 scripts/rebuild_financials.py --validate-only [--backup DIR]
 
 The validation pass compares every rebuilt file against its backup
-and writes scripts/quarterly-rebuild-validation-2026-11-21.json plus
+and writes scripts/screenerin-rebuild-validation-2026-11-21.json plus
 a printed summary: old-field diffs, annual changes (new years vs
 restated values), quarterly cash-flow sum checks, and Q4-vs-annual
-balance checks.
+balance checks. New fields (payables and the three new ratios) are
+counted as coverage, not as changes to old values.
 """
 import argparse
 import json
@@ -32,7 +34,7 @@ import lib.edgar as edgar
 
 DATA = os.path.join(ROOT, "data", "financials")
 REPORT = os.path.join(os.path.dirname(__file__),
-                      "quarterly-rebuild-validation-2026-11-21.json")
+                      "screenerin-rebuild-validation-2026-11-21.json")
 OLD_FIELDS = ["revenue", "operating_income", "net_income", "eps"]
 FLOW_FIELDS = ["cfo", "capex", "dividends"]
 BALANCE_FIELDS = ["assets", "equity", "cash", "debt"]
@@ -81,10 +83,11 @@ def validate(backup_dir):
                      if f.endswith(".json"))
     new_fields = ["cash", "assets", "debt", "equity", "curr_assets",
                   "curr_liab", "receivables", "inventory", "cfo",
-                  "capex", "fcf", "dividends", "cogs"]
+                  "capex", "fcf", "dividends", "cogs", "payables"]
     ratio_fields = ["opm", "net_margin", "roe", "roce", "debt_equity",
                     "current_ratio", "asset_turnover", "debtor_days",
-                    "inventory_days"]
+                    "inventory_days", "payable_days",
+                    "working_capital_days", "ccc"]
     cover = {f: 0 for f in new_fields + ["q_" + r for r in ratio_fields]}
     cover_quarters = 0
     for symbol in symbols:
@@ -115,22 +118,26 @@ def validate(backup_dir):
             if oa is None:
                 report["annual_new_years"].append(
                     {"symbol": symbol, "fy": na["fy"]})
-            elif oa != na:
-                report["annual_changed"].append(
-                    {"symbol": symbol, "fy": na["fy"],
-                     "fields": {k: [oa.get(k), na.get(k)] for k in na
-                                if oa.get(k) != na.get(k)}})
+            else:
+                # Only keys the old row already had count as a change;
+                # brand-new fields (payables) are coverage, not a diff.
+                changed = {k: [oa.get(k), na.get(k)] for k in na
+                           if k in oa and oa.get(k) != na.get(k)}
+                if changed:
+                    report["annual_changed"].append(
+                        {"symbol": symbol, "fy": na["fy"], "fields": changed})
         oldr = {r["fy"]: r for r in old.get("ratios", [])}
         for nr in new.get("ratios", []):
             orr = oldr.get(nr["fy"])
             if orr is None:
                 report["ratio_new_years"].append(
                     {"symbol": symbol, "fy": nr["fy"]})
-            elif orr != nr:
-                report["ratio_changed"].append(
-                    {"symbol": symbol, "fy": nr["fy"],
-                     "fields": {k: [orr.get(k), nr.get(k)] for k in nr
-                                if orr.get(k) != nr.get(k)}})
+            else:
+                changed = {k: [orr.get(k), nr.get(k)] for k in nr
+                           if k in orr and orr.get(k) != nr.get(k)}
+                if changed:
+                    report["ratio_changed"].append(
+                        {"symbol": symbol, "fy": nr["fy"], "fields": changed})
         ann = {a["fy"]: a for a in new.get("annual", [])}
         for lab, nx in newq.items():
             cover_quarters += 1
@@ -180,7 +187,7 @@ def validate(backup_dir):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backup", default="/tmp/financials-backup-2026-11-21")
+    ap.add_argument("--backup", default="/tmp/financials-backup-screenerin-2026-11-21")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--validate-only", action="store_true")
     args = ap.parse_args()
@@ -226,11 +233,13 @@ def main():
     cov = report["coverage"]
     print(f"quarters total: {cov['quarters']}")
     for f in ["cash", "assets", "debt", "equity", "cfo", "capex", "fcf",
-              "dividends", "cogs", "curr_assets", "receivables", "inventory"]:
+              "dividends", "cogs", "curr_assets", "receivables", "inventory",
+              "payables"]:
         print(f"  {f}: {cov[f]} / {cov['quarters']}")
     for r in ["opm", "net_margin", "roe", "roce", "debt_equity",
               "current_ratio", "asset_turnover", "debtor_days",
-              "inventory_days"]:
+              "inventory_days", "payable_days", "working_capital_days",
+              "ccc"]:
         print(f"  ratio {r}: {cov['q_' + r]} / {cov['quarters']}")
 
 

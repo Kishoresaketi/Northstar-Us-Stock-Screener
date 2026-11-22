@@ -84,6 +84,20 @@ def build_chart(symbol, period):
     write(os.path.join(DATA, "chart", f"{file_for(symbol)}-{period}.json"), get_chart(symbol, period))
 
 
+def build_cik_map(tickers):
+    """Ticker -> SEC CIK for the universe, written to data/cik-map.json.
+
+    The profile's SEC Documents links are built from this file. CIKs
+    change only when the universe changes, so it is built in full mode
+    only; the hourly quotes refresh leaves it alone.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    from build_cik_map import build_cik_map as _build
+    out, missing = _build(tickers)
+    write(os.path.join(DATA, "cik-map.json"), out)
+    print(f"cik map: {len(out)} tickers" + (f"; no SEC entry for: {', '.join(missing)}" if missing else ""))
+
+
 def build_search_index(tickers):
     with open(UNIVERSE_PATH, encoding="utf-8") as fh:
         universe = json.load(fh)
@@ -218,6 +232,7 @@ def main():
 
     build_peer_map(tickers)
     build_search_index(tickers)
+    build_cik_map(tickers)
     jobs = []
     for symbol in tickers + INDICES:
         jobs.append((build_quote, (symbol,)))

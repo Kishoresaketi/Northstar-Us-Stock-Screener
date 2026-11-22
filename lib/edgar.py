@@ -886,6 +886,9 @@ def statements(symbol):
     curr_liab = annual(["LiabilitiesCurrent"], flow=False)
     receivables = annual(["AccountsReceivableNetCurrent"], flow=False)
     inventory = annual(["InventoryNet"], flow=False)
+    # Accounts payable: the "Current" tag is the standard one; a few
+    # filers report the plain AccountsPayable tag instead.
+    payables = annual(["AccountsPayableCurrent", "AccountsPayable"], flow=False)
     shares = {int(k[:4]): v for k, v in _shares_by_end(data).items()}
 
     years = sorted(set(revenue) | set(net_income))[-10:]
@@ -898,6 +901,13 @@ def statements(symbol):
         eq = equity.get(fy)
         db = debt.get(fy)
         ebit = op_income.get(fy)
+        # Day-count ratios share inputs, so compute them once: the cash
+        # conversion cycle is debtor days + inventory days - payable days.
+        debtor_d = (receivables.get(fy) / rev * 365) if receivables.get(fy) is not None and rev else None
+        inventory_d = (inventory.get(fy) / cogs.get(fy) * 365) if inventory.get(fy) is not None and cogs.get(fy) else None
+        payable_d = (payables.get(fy) / cogs.get(fy) * 365) if payables.get(fy) is not None and cogs.get(fy) else None
+        wc_days = ((curr_assets.get(fy) - curr_liab.get(fy)) / rev * 365) if curr_assets.get(fy) is not None and curr_liab.get(fy) is not None and rev else None
+        ccc = (debtor_d + inventory_d - payable_d) if debtor_d is not None and inventory_d is not None and payable_d is not None else None
         annual_rows.append({
             "fy": fy,
             "revenue": rev,
@@ -909,6 +919,7 @@ def statements(symbol):
             "equity": eq,
             "debt": db,
             "cash": cash.get(fy),
+            "payables": payables.get(fy),
             "cfo": cfo.get(fy),
             "capex": capex.get(fy),
             "fcf": ((cfo.get(fy) or 0) - (capex.get(fy) or 0)) if cfo.get(fy) is not None and capex.get(fy) is not None else None,
@@ -927,8 +938,11 @@ def statements(symbol):
             "debt_equity": (db / eq) if db is not None and eq else None,
             "current_ratio": (curr_assets.get(fy) / curr_liab.get(fy)) if curr_assets.get(fy) and curr_liab.get(fy) else None,
             "asset_turnover": (rev / assets.get(fy)) if rev and assets.get(fy) else None,
-            "debtor_days": (receivables.get(fy) / rev * 365) if receivables.get(fy) is not None and rev else None,
-            "inventory_days": (inventory.get(fy) / cogs.get(fy) * 365) if inventory.get(fy) is not None and cogs.get(fy) else None,
+            "debtor_days": debtor_d,
+            "inventory_days": inventory_d,
+            "payable_days": payable_d,
+            "working_capital_days": wc_days,
+            "ccc": ccc,
             "ad_pct": (advertising.get(fy) / rev) if advertising.get(fy) is not None and rev else None,
         })
 
@@ -949,6 +963,7 @@ def statements(symbol):
     curr_liab_q = _quarterly_stock_series(data, ["LiabilitiesCurrent"], curr_liab)
     receivables_q = _quarterly_stock_series(data, ["AccountsReceivableNetCurrent"], receivables)
     inventory_q = _quarterly_stock_series(data, ["InventoryNet"], inventory)
+    payables_q = _quarterly_stock_series(data, ["AccountsPayableCurrent", "AccountsPayable"], payables)
     # Quarterly cash flow: 10-Qs report YTD figures, so the quarter's own
     # value is derived by differencing (see _quarterly_flow_ytd_series).
     cfo_q = _quarterly_flow_ytd_series(data, ["NetCashProvidedByOperatingActivities", "NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], cfo)
@@ -978,6 +993,14 @@ def statements(symbol):
         ttm_cogs = _ttm_at(cogs_full, p["fy"], p["fp"])
         receivables = receivables_q.get(key)
         inventory = inventory_q.get(key)
+        payable = payables_q.get(key)
+        curr_a = curr_assets_q.get(key)
+        curr_l = curr_liab_q.get(key)
+        debtor_d = (receivables / ttm_rev * 365) if receivables is not None and ttm_rev else None
+        inventory_d = (inventory / ttm_cogs * 365) if inventory is not None and ttm_cogs else None
+        payable_d = (payable / ttm_cogs * 365) if payable is not None and ttm_cogs else None
+        wc_days = ((curr_a - curr_l) / ttm_rev * 365) if curr_a is not None and curr_l is not None and ttm_rev else None
+        ccc = (debtor_d + inventory_d - payable_d) if debtor_d is not None and inventory_d is not None and payable_d is not None else None
         quarterly_ratios.append({
             "label": f"{p['fp']} FY{p['fy']}",
             "opm": (ebit / rev) if ebit is not None and rev else None,
@@ -990,8 +1013,11 @@ def statements(symbol):
             "debt_equity": (db / eq) if db is not None and eq else None,
             "current_ratio": (curr_assets_q.get(key) / curr_liab_q.get(key)) if curr_assets_q.get(key) and curr_liab_q.get(key) else None,
             "asset_turnover": (ttm_rev / assets_q.get(key)) if ttm_rev and assets_q.get(key) else None,
-            "debtor_days": (receivables / ttm_rev * 365) if receivables is not None and ttm_rev else None,
-            "inventory_days": (inventory / ttm_cogs * 365) if inventory is not None and ttm_cogs else None,
+            "debtor_days": debtor_d,
+            "inventory_days": inventory_d,
+            "payable_days": payable_d,
+            "working_capital_days": wc_days,
+            "ccc": ccc,
         })
     for p in kept:
         key = (p["fy"], p["fp"])
@@ -1014,6 +1040,7 @@ def statements(symbol):
             "curr_liab": curr_liab_q.get(key),
             "receivables": receivables_q.get(key),
             "inventory": inventory_q.get(key),
+            "payables": payables_q.get(key),
             "cfo": cfo,
             "capex": capex,
             "fcf": ((cfo or 0) - (capex or 0)) if cfo is not None and capex is not None else None,
