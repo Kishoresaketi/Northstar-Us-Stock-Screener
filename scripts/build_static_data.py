@@ -21,11 +21,17 @@ sources and the git history for nothing.
 
 A file that fails to refresh keeps its previous version; the run only fails
 if nothing at all was written. Failed jobs are retried once at the end.
+
+Full mode also refreshes the 13F institutional-ownership data, but only
+when a newer completed quarter exists (scripts/refresh_shareholding_if_due.py);
+on all other days that step is a fast no-op, and a failure there never
+breaks the daily rebuild.
 """
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -251,6 +257,18 @@ def main():
             for fn, fn_args in failed2[:20]:
                 print(f"  {fn.__name__} {fn_args}")
     build_fundamentals_summary(tickers)
+    # Monthly 13F refresh: shareholding only changes quarterly, and the
+    # gate script is a fast no-op unless a newer completed quarter exists
+    # (Q3 2026 becomes due Nov 28). A failure here must never break the
+    # daily rebuild, so the step is best-effort by design.
+    try:
+        subprocess.run(
+            [sys.executable,
+             os.path.join(ROOT, "scripts", "refresh_shareholding_if_due.py")],
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - 13F must never break the rebuild
+        print(f"13F refresh step failed (non-fatal): {exc}")
     print(f"refreshed {done}/{len(jobs)} files (full mode)")
     return 0 if done else 1
 
