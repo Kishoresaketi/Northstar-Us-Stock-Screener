@@ -814,6 +814,20 @@ def metrics(symbol, price=None):
     if price is None:
         price = live_price(symbol)["price"]
     shares = _latest_shares(data)
+    # Trailing dividend yield: the latest reported full-year dividends
+    # over the current share count, divided by the price. The dividends
+    # year must be current (within two years) or the yield is stale and
+    # renders as unknown, never as a wrong number. The CommonStock tag
+    # is the fallback: Microsoft and Dow report dividends under it,
+    # not under the plain PaymentsOfDividends tag.
+    from datetime import date
+    div_points = _annual_concept(data, ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"])
+    dps = None
+    if div_points and shares:
+        latest_div = div_points[-1]
+        if (date.today() - date.fromisoformat(latest_div["end"][:10])).days <= 730:
+            dps = latest_div["val"] / shares
+    dividend_yield = (dps / price) if dps and price else None
     revenue_q = _quarterly_series(data, "Revenues", ("SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenuesNetOfInterestExpense"))
     income_q = _quarterly_series(data, "NetIncomeLoss", ("ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"), prefer="NetIncomeLossAvailableToCommonStockholdersBasic")
     ebit_q = _quarterly_series(data, "OperatingIncomeLoss")
@@ -847,6 +861,8 @@ def metrics(symbol, price=None):
             "growth": ((ttm_revenue / prior_ttm_revenue) - 1) if ttm_revenue and prior_ttm_revenue else None,
             "debt_equity": (latest_debt / latest_equity) if latest_debt is not None and latest_equity else None,
             "book_value_per_share": None,
+            "dividend_per_share": None,
+            "dividend_yield": None,
         }
     return {
         "symbol": symbol.upper(),
@@ -860,6 +876,8 @@ def metrics(symbol, price=None):
         "growth": ((ttm_revenue / prior_ttm_revenue) - 1) if ttm_revenue and prior_ttm_revenue else None,
         "debt_equity": (latest_debt / latest_equity) if latest_debt is not None and latest_equity else None,
         "book_value_per_share": (latest_equity / shares) if latest_equity and shares else None,
+        "dividend_per_share": dps,
+        "dividend_yield": dividend_yield,
     }
 
 
@@ -880,7 +898,19 @@ def statements(symbol):
     cash = annual(["CashAndCashEquivalentsAtCarryingValue"], flow=False)
     cfo = annual(["NetCashProvidedByOperatingActivities", "NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"])
     capex = annual(["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"])
-    dividends = annual(["PaymentsOfDividends"])
+    # Dividends: the plain tag misses filers that report only the
+    # CommonStock tag (Microsoft, Dow) — the fallback fills them, and
+    # the per-year gap-fill in _annual_concept never double-counts.
+    dividends = annual(["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"])
+    # Fuller P&L lines. Interest and depreciation use several tags for
+    # the same line (filers switch tags over the years; the gap-fill in
+    # _annual_concept keeps one series). PBT likewise has an older
+    # tag variant. Other income is the single net non-operating line.
+    other_income = annual(["NonoperatingIncomeExpense"])
+    interest = annual(["InterestExpense", "InterestExpenseDebt", "InterestExpenseNonoperating", "InterestAndDebtExpense"])
+    depreciation = annual(["DepreciationDepletionAndAmortization", "Depreciation"])
+    pbt = annual(["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"])
+    tax = annual(["IncomeTaxExpenseBenefit"])
     advertising = annual(["AdvertisingExpense"])
     curr_assets = annual(["AssetsCurrent"], flow=False)
     curr_liab = annual(["LiabilitiesCurrent"], flow=False)
@@ -920,6 +950,17 @@ def statements(symbol):
             "debt": db,
             "cash": cash.get(fy),
             "payables": payables.get(fy),
+            # Expenses is not a reported line for most US filers (the
+            # CostsAndExpenses tag is absent for Apple and Dow): it is
+            # revenue minus operating income, the total operating cost
+            # implied by the two reported figures — exact arithmetic,
+            # like free cash flow, never an estimate.
+            "expenses": (rev - ebit) if rev is not None and ebit is not None else None,
+            "other_income": other_income.get(fy),
+            "interest": interest.get(fy),
+            "depreciation": depreciation.get(fy),
+            "pbt": pbt.get(fy),
+            "tax": tax.get(fy),
             "cfo": cfo.get(fy),
             "capex": capex.get(fy),
             "fcf": ((cfo.get(fy) or 0) - (capex.get(fy) or 0)) if cfo.get(fy) is not None and capex.get(fy) is not None else None,
@@ -968,7 +1009,17 @@ def statements(symbol):
     # value is derived by differencing (see _quarterly_flow_ytd_series).
     cfo_q = _quarterly_flow_ytd_series(data, ["NetCashProvidedByOperatingActivities", "NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"], cfo)
     capex_q = _quarterly_flow_ytd_series(data, ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], capex, non_negative=True)
-    dividends_q = _quarterly_flow_ytd_series(data, ["PaymentsOfDividends"], dividends, non_negative=True)
+    dividends_q = _quarterly_flow_ytd_series(data, ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], dividends, non_negative=True)
+    # Fuller quarterly P&L: income-statement lines carry 3-month
+    # figures in 10-Qs, so they use the framed quarterly series.
+    # Depreciation is different — it is reported in the cash-flow
+    # statement, whose 10-Q figures are year-to-date only, so the
+    # quarter's own value is derived by differencing, like capex.
+    other_income_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "NonoperatingIncomeExpense")}
+    interest_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "InterestExpense", ("InterestExpenseDebt", "InterestExpenseNonoperating", "InterestAndDebtExpense"))}
+    pbt_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",))}
+    tax_q = {(p["fy"], p["fp"]): p["val"] for p in _quarterly_series(data, "IncomeTaxExpenseBenefit")}
+    depreciation_q = _quarterly_flow_ytd_series(data, ["DepreciationDepletionAndAmortization", "Depreciation"], depreciation, non_negative=True)
     # Quarterly cost of revenue: a flow with 3-month figures in 10-Qs,
     # like revenue — also completes the quarterly P&L and feeds
     # inventory days.
@@ -1029,7 +1080,13 @@ def statements(symbol):
             "end": p["end"],
             "revenue": p["val"],
             "cogs": cogs_q.get(key),
+            "expenses": (p["val"] - op_q.get(key)) if p["val"] is not None and op_q.get(key) is not None else None,
             "operating_income": op_q.get(key),
+            "other_income": other_income_q.get(key),
+            "interest": interest_q.get(key),
+            "depreciation": depreciation_q.get(key),
+            "pbt": pbt_q.get(key),
+            "tax": tax_q.get(key),
             "net_income": ni,
             "eps": (ni / latest_shares) if ni is not None and latest_shares else None,
             "cash": cash_q.get(key),

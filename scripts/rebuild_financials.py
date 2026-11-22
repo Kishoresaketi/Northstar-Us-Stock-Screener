@@ -1,23 +1,32 @@
 #!/usr/bin/env python3
-"""Rebuild data/financials/*.json with the Screener.in additions: the
-accounts-payable field plus the days-payable, working-capital-days
-and cash-conversion-cycle ratios added by the pipeline change.
+"""Rebuild data/financials/*.json with the fuller Screener.in remainder:
+the fuller P&L lines (expenses, other income, interest, depreciation,
+profit before tax, tax), the dividends CommonStock fallback tag, and
+the dividend yield in the metrics block.
 
 Only the statements keys are replaced (annual / quarterly / ratios /
-quarterly_ratios); price, metrics, peers, pros, cons, asOf and source
-are preserved from the existing file, so the rebuild changes no
-unrelated data. A ticker that fails to rebuild keeps its old file.
+quarterly_ratios); the metrics block is recomputed from the same
+facts with the stored price, so the new dividend yield lands in the
+static files without a new Yahoo call. Price, peers, pros, cons, asOf
+and source are preserved from the existing file, so the rebuild
+changes no unrelated data. A ticker that fails to rebuild keeps its
+old file; a ticker whose metrics fail keeps its old metrics block.
+
+The backup lives under ~/workspace/northstar-screener (not /tmp,
+which gets cleaned).
 
 Usage:
     python3 scripts/rebuild_financials.py [--backup DIR] [--workers N]
     python3 scripts/rebuild_financials.py --validate-only [--backup DIR]
 
 The validation pass compares every rebuilt file against its backup
-and writes scripts/screenerin-rebuild-validation-2026-11-21.json plus
+and writes scripts/fuller-rebuild-validation-2026-11-22.json plus
 a printed summary: old-field diffs, annual changes (new years vs
 restated values), quarterly cash-flow sum checks, and Q4-vs-annual
-balance checks. New fields (payables and the three new ratios) are
-counted as coverage, not as changes to old values.
+balance checks. New fields (the fuller P&L lines) are counted as
+coverage, not as changes to old values. Dividends changes are the
+CommonStock concept fix, not restatements, and are reported
+separately.
 """
 import argparse
 import json
@@ -34,9 +43,10 @@ import lib.edgar as edgar
 
 DATA = os.path.join(ROOT, "data", "financials")
 REPORT = os.path.join(os.path.dirname(__file__),
-                      "screenerin-rebuild-validation-2026-11-21.json")
+                      "fuller-rebuild-validation-2026-11-22.json")
 OLD_FIELDS = ["revenue", "operating_income", "net_income", "eps"]
-FLOW_FIELDS = ["cfo", "capex", "dividends"]
+FLOW_FIELDS = ["cfo", "capex", "dividends", "depreciation",
+               "other_income", "interest", "pbt", "tax"]
 BALANCE_FIELDS = ["assets", "equity", "cash", "debt"]
 
 
@@ -65,6 +75,17 @@ def rebuild_one(symbol, backup_dir):
     new["quarterly"] = stmts["quarterly"]
     new["ratios"] = stmts["ratios"]
     new["quarterly_ratios"] = stmts["quarterly_ratios"]
+    # Metrics are recomputed from the same facts with the stored price
+    # (no new Yahoo call): this carries the new dividend yield into
+    # the static files. changePercent is not computed by metrics(),
+    # so it is carried over from the stored block.
+    if old.get("price"):
+        try:
+            metrics = edgar.metrics(symbol, price=old["price"])
+            metrics["changePercent"] = old.get("metrics", {}).get("changePercent")
+            new["metrics"] = metrics
+        except Exception:
+            pass
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(new, fh)
@@ -78,12 +99,16 @@ def validate(backup_dir):
               "annual_new_years": [], "annual_changed": [],
               "ratio_new_years": [], "ratio_changed": [],
               "sum_mismatches": [], "q4_mismatches": [],
-              "coverage": {}, "no_quarterly_ratios": []}
+              "coverage": {}, "no_quarterly_ratios": [],
+              "dividends_coverage": {"annual_gained": 0, "quarterly_gained": 0},
+              "metrics_dividend_yield": 0, "metrics_changed": []}
     symbols = sorted(f[:-5] for f in os.listdir(backup_dir)
                      if f.endswith(".json"))
     new_fields = ["cash", "assets", "debt", "equity", "curr_assets",
                   "curr_liab", "receivables", "inventory", "cfo",
-                  "capex", "fcf", "dividends", "cogs", "payables"]
+                  "capex", "fcf", "dividends", "cogs", "payables",
+                  "expenses", "other_income", "interest",
+                  "depreciation", "pbt", "tax"]
     ratio_fields = ["opm", "net_margin", "roe", "roce", "debt_equity",
                     "current_ratio", "asset_turnover", "debtor_days",
                     "inventory_days", "payable_days",
@@ -120,12 +145,30 @@ def validate(backup_dir):
                     {"symbol": symbol, "fy": na["fy"]})
             else:
                 # Only keys the old row already had count as a change;
-                # brand-new fields (payables) are coverage, not a diff.
+                # brand-new fields (the fuller P&L lines) are coverage,
+                # not a diff. Dividends None -> value is the CommonStock
+                # concept fix, counted separately below.
                 changed = {k: [oa.get(k), na.get(k)] for k in na
                            if k in oa and oa.get(k) != na.get(k)}
                 if changed:
                     report["annual_changed"].append(
                         {"symbol": symbol, "fy": na["fy"], "fields": changed})
+                if oa.get("dividends") is None and na.get("dividends") is not None:
+                    report["dividends_coverage"]["annual_gained"] += 1
+        for lab, nx in newq.items():
+            ox = oldq.get(lab)
+            if ox is not None and ox.get("dividends") is None and nx.get("dividends") is not None:
+                report["dividends_coverage"]["quarterly_gained"] += 1
+        oldm = old.get("metrics") or {}
+        newm = new.get("metrics") or {}
+        if newm.get("dividend_yield") is not None:
+            report["metrics_dividend_yield"] += 1
+        mchanged = {k: [oldm.get(k), newm.get(k)] for k in newm
+                    if k in oldm and k != "dividend_yield"
+                    and k != "dividend_per_share"
+                    and oldm.get(k) != newm.get(k)}
+        if mchanged:
+            report["metrics_changed"].append({"symbol": symbol, "fields": mchanged})
         oldr = {r["fy"]: r for r in old.get("ratios", [])}
         for nr in new.get("ratios", []):
             orr = oldr.get(nr["fy"])
@@ -187,7 +230,8 @@ def validate(backup_dir):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backup", default="/tmp/financials-backup-screenerin-2026-11-21")
+    ap.add_argument("--backup", default=os.path.expanduser(
+        "~/workspace/northstar-screener/financials-backup-fuller-2026-11-22"))
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--validate-only", action="store_true")
     args = ap.parse_args()
@@ -230,11 +274,17 @@ def main():
     print(f"quarterly sum mismatches: {len(report['sum_mismatches'])}")
     print(f"Q4-vs-annual mismatches: {len(report['q4_mismatches'])}")
     print(f"tickers with no quarterly ratios: {len(report['no_quarterly_ratios'])}")
+    print(f"dividends coverage gained (CommonStock fix): "
+          f"annual rows {report['dividends_coverage']['annual_gained']}, "
+          f"quarterly rows {report['dividends_coverage']['quarterly_gained']}")
+    print(f"tickers with a dividend yield now: {report['metrics_dividend_yield']}")
+    print(f"metrics changed (restated facts, excl. new yield fields): {len(report['metrics_changed'])}")
     cov = report["coverage"]
     print(f"quarters total: {cov['quarters']}")
     for f in ["cash", "assets", "debt", "equity", "cfo", "capex", "fcf",
               "dividends", "cogs", "curr_assets", "receivables", "inventory",
-              "payables"]:
+              "payables", "expenses", "other_income", "interest",
+              "depreciation", "pbt", "tax"]:
         print(f"  {f}: {cov[f]} / {cov['quarters']}")
     for r in ["opm", "net_margin", "roe", "roce", "debt_equity",
               "current_ratio", "asset_turnover", "debtor_days",

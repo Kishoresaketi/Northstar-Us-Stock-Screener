@@ -18,9 +18,12 @@ const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(ROOT, 'profile.js'), 'utf8');
 
 // Extract top-level function declarations by name (brace matching).
+// Keeps an `async ` prefix when the function is async, so an await
+// inside the body still parses.
 function extract(name) {
-  const start = src.indexOf(`function ${name}(`);
+  let start = src.indexOf(`function ${name}(`);
   if (start < 0) throw new Error(`function ${name} not found in profile.js`);
+  if (src.slice(start - 6, start) === 'async ') start -= 6;
   let i = src.indexOf('{', start);
   let depth = 0;
   for (; i < src.length; i++) {
@@ -62,9 +65,11 @@ globalThis.lucide = { createIcons() {} };
 const fns = ['fmtMillions', 'fmtCap', 'fmtPct', 'fmtSignedPct', 'fmtNum',
   'fmtDollars', 'fmtDays', 'table', 'emptyTable', 'halfYearly',
   'halfYearlyRatios', 'ttmFor', 'growthFor', 'profitRowsFor',
-  'renderProfit', 'balanceRowsFor', 'ratiosRowsFor',
-  'renderPeriodSection', 'renderBalance', 'renderRatios', 'renderGrowth',
-  'edgarLinks', 'movingAverage', 'movingAverageSeries', 'isDailySeries'];
+  'renderProfit', 'balanceRowsFor', 'cashflowRowsFor', 'ratiosRowsFor',
+  'renderPeriodSection', 'renderBalance', 'renderCashflow', 'renderRatios',
+  'renderGrowth', 'edgarLinks', 'movingAverage', 'movingAverageSeries',
+  'isDailySeries', 'cagrFor', 'roeAvgFor', 'ttmGrowthFor', 'priceCagrFor',
+  'cagrValues', 'growthCardsHtml'];
 for (const name of fns) eval(extract(name));
 // halfYearly reads the field lists, which are consts in profile.js —
 // const/let never leak out of an eval, so put them on globalThis,
@@ -128,7 +133,7 @@ check(Math.abs(g.eps.yoy - (latest.eps - yearAgo.eps) / yearAgo.eps) < 1e-12, 'A
 check(g.revenue.yoyLabel === `${latest.label} vs ${yearAgo.label}`, 'YoY label names both quarters');
 periodData = { annual: aapl.annual, quarterly: q, ratios: aapl.ratios, quarterly_ratios: aapl.quarterly_ratios };
 renderGrowth(aapl);
-check((grids.growth.innerHTML.match(/insight-card/g) || []).length === 3, 'growth grid renders 3 cards (Revenue, Net income, EPS)');
+check((grids.growth.innerHTML.match(/insight-card/g) || []).length === 7, 'growth grid renders 7 cards (Revenue, Net income, EPS + Sales CAGR, Profit CAGR, Price CAGR, ROE)');
 check(grids.growth.innerHTML.includes('Year over year'), 'growth cards show the YoY line');
 check(grids.growth.innerHTML.includes('Prior quarter'), 'growth cards show the QoQ line');
 renderGrowth(arm);

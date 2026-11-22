@@ -142,7 +142,7 @@ function renderDataNotes(data) {
 // the later quarter's (half-end) value. Only halves with both quarters
 // reported are shown; a half with a missing quarter is skipped, never
 // estimated. EPS sums the quarters.
-const HALF_FLOW_FIELDS = ['revenue', 'cogs', 'operating_income', 'net_income', 'eps', 'cfo', 'capex', 'fcf', 'dividends'];
+const HALF_FLOW_FIELDS = ['revenue', 'cogs', 'expenses', 'operating_income', 'other_income', 'interest', 'depreciation', 'pbt', 'tax', 'net_income', 'eps', 'cfo', 'capex', 'fcf', 'dividends'];
 const HALF_STOCK_FIELDS = ['cash', 'assets', 'debt', 'equity', 'curr_assets', 'curr_liab', 'receivables', 'inventory', 'payables'];
 function halfYearly(quarterly) {
   const byFy = {};
@@ -221,7 +221,7 @@ function ttmFor(quarterly) {
   const last4 = (quarterly || []).slice(-4);
   if (last4.length < 4) return null;
   const sum = field => last4.every(q => q[field] != null) ? last4.reduce((a, q) => a + q[field], 0) : null;
-  return { revenue: sum('revenue'), cogs: sum('cogs'), operating_income: sum('operating_income'), net_income: sum('net_income'), eps: sum('eps') };
+  return { revenue: sum('revenue'), cogs: sum('cogs'), expenses: sum('expenses'), operating_income: sum('operating_income'), other_income: sum('other_income'), interest: sum('interest'), depreciation: sum('depreciation'), pbt: sum('pbt'), tax: sum('tax'), net_income: sum('net_income'), eps: sum('eps') };
 }
 // Latest quarter vs the same quarter a year ago (YoY) and vs the prior
 // quarter (QoQ), from reported figures only. A growth figure is null
@@ -244,11 +244,25 @@ function growthFor(quarterly) {
 }
 function profitRowsFor(period) {
   const { annual, quarterly } = profitData || { annual: [], quarterly: [] };
+  // A fuller P&L row only appears when at least one period reports
+  // the figure — companies that never report it get no empty row.
+  // Tax % is the reported income-tax expense over profit before tax.
+  const has = (list, field) => list.some(r => r[field] != null);
+  const taxRow = list => ['Tax %', ...list.map(r => (r.tax != null && r.pbt) ? fmtPct(r.tax / r.pbt) : '—')];
+  const fullerRows = list => [
+    ...(has(list, 'expenses') ? [['Expenses', ...list.map(r => fmtMillions(r.expenses))]] : []),
+    ['Operating income', ...list.map(r => fmtMillions(r.operating_income))],
+    ...(has(list, 'other_income') ? [['Other income', ...list.map(r => fmtMillions(r.other_income))]] : []),
+    ...(has(list, 'interest') ? [['Interest', ...list.map(r => fmtMillions(r.interest))]] : []),
+    ...(has(list, 'depreciation') ? [['Depreciation', ...list.map(r => fmtMillions(r.depreciation))]] : []),
+    ...(has(list, 'pbt') ? [['Profit before tax', ...list.map(r => fmtMillions(r.pbt))]] : []),
+    ...(has(list, 'tax') ? [taxRow(list)] : []),
+  ];
   if (period === 'quarter') {
     if (!quarterly.length) return null;
     return { headers: ['Metric', ...quarterly.map(q => q.label)], rows: [
       ['Revenue', ...quarterly.map(q => fmtMillions(q.revenue))],
-      ['Operating income', ...quarterly.map(q => fmtMillions(q.operating_income))],
+      ...fullerRows(quarterly),
       ['Net income', ...quarterly.map(q => fmtMillions(q.net_income))],
       ['EPS diluted', ...quarterly.map(q => fmtDollars(q.eps))],
       ['Operating margin', ...quarterly.map(q => (q.operating_income != null && q.revenue) ? fmtPct(q.operating_income / q.revenue) : '—')]] };
@@ -258,7 +272,7 @@ function profitRowsFor(period) {
     if (!halves.length) return null;
     return { headers: ['Metric', ...halves.map(h => h.label)], rows: [
       ['Revenue', ...halves.map(h => fmtMillions(h.revenue))],
-      ['Operating income', ...halves.map(h => fmtMillions(h.operating_income))],
+      ...fullerRows(halves),
       ['Net income', ...halves.map(h => fmtMillions(h.net_income))],
       ['EPS diluted', ...halves.map(h => fmtDollars(h.eps))],
       ['Operating margin', ...halves.map(h => (h.operating_income != null && h.revenue) ? fmtPct(h.operating_income / h.revenue) : '—')]] };
@@ -269,10 +283,17 @@ function profitRowsFor(period) {
   // so that cell is always blank.
   const ttm = ttmFor(quarterly);
   const ttmVal = field => (ttm ? ttm[field] : null);
+  const hasTtm = field => has(annual, field) || ttmVal(field) != null;
   return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`), 'TTM'], rows: [
     ['Revenue', ...annual.map(r => fmtMillions(r.revenue)), fmtMillions(ttmVal('revenue'))],
-    ...(annual.some(r => r.cogs != null) ? [['Cost of revenue', ...annual.map(r => fmtMillions(r.cogs)), fmtMillions(ttmVal('cogs'))]] : []),
+    ...(hasTtm('cogs') ? [['Cost of revenue', ...annual.map(r => fmtMillions(r.cogs)), fmtMillions(ttmVal('cogs'))]] : []),
+    ...(hasTtm('expenses') ? [['Expenses', ...annual.map(r => fmtMillions(r.expenses)), fmtMillions(ttmVal('expenses'))]] : []),
     ['Operating income', ...annual.map(r => fmtMillions(r.operating_income)), fmtMillions(ttmVal('operating_income'))],
+    ...(hasTtm('other_income') ? [['Other income', ...annual.map(r => fmtMillions(r.other_income)), fmtMillions(ttmVal('other_income'))]] : []),
+    ...(hasTtm('interest') ? [['Interest', ...annual.map(r => fmtMillions(r.interest)), fmtMillions(ttmVal('interest'))]] : []),
+    ...(hasTtm('depreciation') ? [['Depreciation', ...annual.map(r => fmtMillions(r.depreciation)), fmtMillions(ttmVal('depreciation'))]] : []),
+    ...(hasTtm('pbt') ? [['Profit before tax', ...annual.map(r => fmtMillions(r.pbt)), fmtMillions(ttmVal('pbt'))]] : []),
+    ...(hasTtm('tax') ? [['Tax %', ...annual.map(r => (r.tax != null && r.pbt) ? fmtPct(r.tax / r.pbt) : '—'), (ttmVal('tax') != null && ttmVal('pbt')) ? fmtPct(ttmVal('tax') / ttmVal('pbt')) : '—']] : []),
     ['Net income', ...annual.map(r => fmtMillions(r.net_income)), fmtMillions(ttmVal('net_income'))],
     ['EPS diluted', ...annual.map(r => fmtDollars(r.eps)), fmtDollars(ttmVal('eps'))],
     ...(annual.some(r => r.advertising != null) ? [['Advertising expense', ...annual.map(r => fmtMillions(r.advertising)), '—']] : []),
@@ -313,7 +334,12 @@ function balanceRowsFor(period) {
     return { headers: ['Metric', ...halves.map(h => h.label)], rows: rows(halves) };
   }
   if (!annual.length) return null;
-  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: rows(annual) };
+  // The Latest Q column sits alongside the annual columns: the most
+  // recent reported quarter's balances. For a Q4 latest quarter it
+  // matches the last annual column — both are the year-end balance.
+  const latest = quarterly[quarterly.length - 1];
+  if (!latest) return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: rows(annual) };
+  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`), latest.label], rows: rows([...annual, latest]) };
 }
 function cashflowRowsFor(period) {
   const { annual, quarterly } = periodData || { annual: [], quarterly: [] };
@@ -333,7 +359,11 @@ function cashflowRowsFor(period) {
     return { headers: ['Metric', ...halves.map(h => h.label)], rows: rows(halves) };
   }
   if (!annual.length) return null;
-  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: rows(annual) };
+  // The Latest Q column sits alongside the annual columns: the most
+  // recent reported quarter's cash flow.
+  const latest = quarterly[quarterly.length - 1];
+  if (!latest) return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`)], rows: rows(annual) };
+  return { headers: ['Metric', ...annual.map(r => `FY${r.fy}`), latest.label], rows: rows([...annual, latest]) };
 }
 function ratiosRowsFor(period) {
   const { annual, quarterly, ratios, quarterly_ratios } = periodData || { annual: [], quarterly: [], ratios: [], quarterly_ratios: [] };
@@ -381,14 +411,14 @@ function renderPeriodSection(period, tableId, switchId, eyebrowId, subtitleId, c
 }
 function renderBalance(period) {
   renderPeriodSection(period, 'balanceTable', 'balancePeriodSwitch', 'balanceEyebrow', 'balanceSubtitle', {
-    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions.'],
+    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions. Latest Q is the most recent reported quarter.'],
     half: ['HALF-YEARLY', 'Half-end balances from reported quarters, in USD millions. Only halves with both quarters reported are shown.'],
     quarter: ['LAST 12 QUARTERS', 'Quarter-end balances, in USD millions.'],
   }, balanceRowsFor);
 }
 function renderCashflow(period) {
   renderPeriodSection(period, 'cashflowTable', 'cashflowPeriodSwitch', 'cashflowEyebrow', 'cashflowSubtitle', {
-    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions.'],
+    yearly: ['ANNUAL HISTORY', 'Last ten reported financial years, in USD millions. Latest Q is the most recent reported quarter.'],
     half: ['HALF-YEARLY', 'Half-year totals derived from reported quarters, in USD millions. Only halves with both quarters reported are shown.'],
     quarter: ['LAST 12 QUARTERS', 'Quarter-by-quarter cash flow, in USD millions.'],
   }, cashflowRowsFor);
@@ -400,14 +430,86 @@ function renderRatios(period) {
     quarter: ['LAST 12 QUARTERS', 'Quarterly ratios. Returns and turnover use trailing-twelve-month flows over the quarter-end balance.'],
   }, ratiosRowsFor);
 }
-function renderGrowth(data) {
-  const grid = document.querySelector('#growthGrid');
-  if (!grid) return;
-  const g = data ? growthFor(data.quarterly) : null;
-  if (!g) {
-    grid.innerHTML = '<article class="insight-card"><h3>Growth</h3><p>No quarterly filings reported for this company yet.</p></article>';
-    return;
+// Compound annual growth over a window of yearly values, oldest to
+// newest. A window needs all its years present and positive — a
+// missing or non-positive year makes the rate undefined, never
+// estimated. The window counts years, so a 10-year CAGR spans nine
+// intervals between the first and the last year.
+function cagrFor(values, window) {
+  if (!values || values.length < window) return null;
+  const base = values[values.length - window];
+  const latest = values[values.length - 1];
+  if (base == null || latest == null || base <= 0 || latest <= 0) return null;
+  return Math.pow(latest / base, 1 / (window - 1)) - 1;
+}
+// Average return on equity over the last `window` annual ratios.
+// Every year in the window must be present, or the average is blank.
+function roeAvgFor(ratios, window) {
+  const vals = (ratios || []).slice(-window).map(r => r.roe);
+  if (vals.length < window || vals.some(v => v == null)) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+// Trailing-twelve-month growth: the last four quarters vs the four
+// before them. All eight quarters must report the figure, and the
+// base period must be positive.
+function ttmGrowthFor(quarterly, field) {
+  const qs = quarterly || [];
+  if (qs.length < 8) return null;
+  const now = qs.slice(-4);
+  const prior = qs.slice(-8, -4);
+  if (![...now, ...prior].every(q => q[field] != null)) return null;
+  const a = now.reduce((s, q) => s + q[field], 0);
+  const b = prior.reduce((s, q) => s + q[field], 0);
+  if (b <= 0) return null;
+  return (a - b) / b;
+}
+// Price CAGR from a price history ([[timestamp, close], ...],
+// ascending). The start is the close nearest to `years` before the
+// latest close; blank unless a point sits within 60 days of that
+// target — a series too short for the window gives no rate. The
+// exponent uses the actual elapsed time, not the nominal window.
+function priceCagrFor(points, years) {
+  if (!points || points.length < 2) return null;
+  const latest = points[points.length - 1];
+  const target = latest[0] - years * 365.25 * 86400;
+  let best = null;
+  let bestDiff = Infinity;
+  for (const p of points) {
+    const d = Math.abs(p[0] - target);
+    if (d < bestDiff) { bestDiff = d; best = p; }
   }
+  if (!best || bestDiff > 60 * 86400 || best[1] <= 0 || latest[1] <= 0) return null;
+  const elapsed = (latest[0] - best[0]) / (365.25 * 86400);
+  if (elapsed <= 0) return null;
+  return Math.pow(latest[1] / best[1], 1 / elapsed) - 1;
+}
+// Compound-growth values for the four CAGR cards. Sales and profit
+// come from the annual series, ROE is the average annual ROE, and
+// price comes from the 10-year chart history when it has loaded
+// (null until then — the card renders with blanks, then refills).
+function cagrValues(data, chartPoints) {
+  const annual = (data && data.annual) || [];
+  const ratios = (data && data.ratios) || [];
+  const quarterly = (data && data.quarterly) || [];
+  const series = field => annual.map(r => r[field]);
+  const windows = [[10, 'y10'], [5, 'y5'], [3, 'y3']];
+  const one = (values, isRoe) => {
+    const out = {};
+    for (const [w, key] of windows) out[key] = isRoe ? roeAvgFor(ratios, w) : cagrFor(values, w);
+    return out;
+  };
+  const sales = one(series('revenue'), false);
+  sales.ttm = (data.metrics && data.metrics.growth != null) ? data.metrics.growth : null;
+  const profit = one(series('net_income'), false);
+  profit.ttm = ttmGrowthFor(quarterly, 'net_income');
+  const roe = one(null, true);
+  roe.ttm = (data.metrics && data.metrics.roe != null) ? data.metrics.roe : null;
+  const price = {};
+  for (const [w, key] of windows) price[key] = chartPoints ? priceCagrFor(chartPoints, w) : null;
+  price.ttm = chartPoints ? priceCagrFor(chartPoints, 1) : null;
+  return { sales, profit, price, roe };
+}
+function growthCardsHtml(g, cagr) {
   const line = (label, item, key) => {
     const value = item[key];
     const vs = item[key === 'yoy' ? 'yoyLabel' : 'qoqLabel'];
@@ -415,8 +517,29 @@ function renderGrowth(data) {
     return `${label}: ${fmtSignedPct(value)} (${vs})`;
   };
   const card = (title, item) => `<article class="insight-card"><i data-lucide="trending-up"></i><h3>${title}</h3><p>${line('Year over year', item, 'yoy')}<br>${line('Prior quarter', item, 'qoq')}</p></article>`;
-  grid.innerHTML = card('Revenue', g.revenue) + card('Net income', g.net_income) + card('EPS diluted', g.eps);
+  const cagrLine = (label, value) => `${label}: ${value == null ? '—' : fmtSignedPct(value)}`;
+  const cagrCard = (title, item) => `<article class="insight-card"><i data-lucide="trending-up"></i><h3>${title}</h3><p>${cagrLine('10Y', item.y10)}<br>${cagrLine('5Y', item.y5)}<br>${cagrLine('3Y', item.y3)}<br>${cagrLine('TTM', item.ttm)}</p></article>`;
+  return card('Revenue', g.revenue) + card('Net income', g.net_income) + card('EPS diluted', g.eps)
+    + cagrCard('Sales CAGR', cagr.sales) + cagrCard('Profit CAGR', cagr.profit)
+    + cagrCard('Price CAGR', cagr.price) + cagrCard('ROE', cagr.roe);
+}
+async function renderGrowth(data) {
+  const grid = document.querySelector('#growthGrid');
+  if (!grid) return;
+  const g = data ? growthFor(data.quarterly) : null;
+  if (!g) {
+    grid.innerHTML = '<article class="insight-card"><h3>Growth</h3><p>No quarterly filings reported for this company yet.</p></article>';
+    return;
+  }
+  grid.innerHTML = growthCardsHtml(g, cagrValues(data, null));
   lucide.createIcons();
+  // Price CAGR needs the 10-year chart history; it fills in once
+  // that loads, and stays blank if the history is unavailable.
+  try {
+    const chart = await NorthstarAPI.chart(data.symbol, '10y');
+    grid.innerHTML = growthCardsHtml(g, cagrValues(data, chart.points));
+    lucide.createIcons();
+  } catch (error) { /* price CAGR lines stay blank */ }
 }
 function renderFinancials(data) {
   const m = data.metrics || {};
@@ -468,7 +591,7 @@ function renderSnapshot(profile, data) {
   const m = data ? (data.metrics || {}) : {};
   const annual = data ? (data.annual || []) : [];
   const latest = annual.length ? annual[annual.length - 1] : null;
-  document.querySelector('#keyMetrics').innerHTML = [['Market cap', fmtCap(m.cap)], ['P/E ratio', fmtNum(m.pe, 1)], ['ROE', fmtPct(m.roe)], ['Debt / equity', fmtNum(m.debt_equity)], ['EPS (TTM)', fmtDollars(m.eps_ttm)], ['52W range', '<span id="metric52w">—</span>'], ['50-day avg', `<span id="metricMA50">${ma50Value != null ? fmtDollars(ma50Value) : '—'}</span>`], ['200-day avg', `<span id="metricMA200">${ma200Value != null ? fmtDollars(ma200Value) : '—'}</span>`]].map(([name, value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
+  document.querySelector('#keyMetrics').innerHTML = [['Market cap', fmtCap(m.cap)], ['P/E ratio', fmtNum(m.pe, 1)], ['ROE', fmtPct(m.roe)], ['Debt / equity', fmtNum(m.debt_equity)], ['EPS (TTM)', fmtDollars(m.eps_ttm)], ['Book value / share', fmtDollars(m.book_value_per_share)], ['Dividend yield', fmtPct(m.dividend_yield)], ['52W range', '<span id="metric52w">—</span>'], ['50-day avg', `<span id="metricMA50">${ma50Value != null ? fmtDollars(ma50Value) : '—'}</span>`], ['200-day avg', `<span id="metricMA200">${ma200Value != null ? fmtDollars(ma200Value) : '—'}</span>`]].map(([name, value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('');
   const growthCard = m.growth == null
     ? ['Revenue trend', 'Trailing revenue growth is not available from the company filings.', 'trending-up']
     : ['Revenue trend', m.growth >= 0 ? `Revenue grew ${fmtPct(m.growth)} over the last twelve months.` : `Revenue was down ${fmtPct(Math.abs(m.growth))} over the last twelve months.`, 'trending-up'];
