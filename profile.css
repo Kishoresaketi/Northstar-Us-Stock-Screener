@@ -6,3 +6,4 @@
 .data-notes ul{margin:0;padding:0;list-style:none;display:grid;gap:7px}
 .data-notes li{font-size:12px;line-height:1.6;color:#5c5644}
 .data-notes li:before{content:"•";color:#c9a227;margin-right:7px}
+.holder-group{background:#fff;border:1px solid var(--line);margin-top:18px}.holder-group-head{width:100%;display:flex;align-items:center;gap:10px;height:56px;padding:0 17px;border:0;background:none;font:700 11px Manrope;color:#647069;cursor:pointer;text-align:left}.holder-group-head:hover{color:var(--ink)}.holder-group-pct{margin-left:auto;font:600 12px 'DM Mono',monospace;color:#34413a}.holder-group-chevron{transition:transform .15s ease}.holder-group.open .holder-group-chevron{transform:rotate(180deg)}.holder-group-body{display:none;border-top:1px solid var(--line)}.holder-group.open .holder-group-body{display:block}.holder-group-note{padding:16px 17px;font-size:12px;line-height:1.6;color:#536059;margin:0}

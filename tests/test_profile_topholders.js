@@ -142,4 +142,21 @@ if (fs.existsSync(topPath) && fs.existsSync(shPath)) {
   console.log('data/top-holders.json not built yet — fixture checks only');
 }
 
+// --- Dropdown structure: Institutions / Insiders / Public each open like
+// a dropdown over their top-5 list; the tables keep their ids so the
+// loaders above still populate them.
+const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+for (const id of ['holderGroupInstitutions', 'holderGroupInsiders', 'holderGroupPublic',
+  'holderPctInstitutions', 'holderPctInsiders', 'holderPctPublic',
+  'holderBodyInstitutions', 'holderBodyInsiders', 'holderBodyPublic',
+  'topInstitutionsTable', 'topInsidersTable']) {
+  check(html.includes(`id="${id}"`), `index.html must contain id="${id}"`);
+}
+check((html.match(/class="holder-group-head"/g) || []).length === 3, 'index.html must have exactly 3 holder-group-head buttons');
+check(html.includes('profile.js?v=7'), 'index.html must load profile.js?v=7');
+check(src.includes("'.holder-group-head'"), 'profile.js must wire the holder-group-head buttons');
+check(src.includes("holder-group'") || src.includes('holder-group'), 'profile.js must toggle the holder-group open state');
+check(src.includes('holderPctInstitutions') && src.includes('holderPctInsiders') && src.includes('holderPctPublic'),
+  'profile.js must update the three dropdown header percentages');
+
 console.log(`ALL CHECKS PASSED (${checks} checks)`);

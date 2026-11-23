@@ -92,6 +92,14 @@ async function loadShareholding(symbol) {
       note.textContent = text;
     }
     table('shareholdingTable', ['Holder', 'Share'], shareholdingSummaryRows(entry.institutions_pct, insidersPct));
+    // Dropdown headers carry the same split as the summary table.
+    const pctEl = id => document.querySelector(id);
+    const instPctEl = pctEl('#holderPctInstitutions');
+    if (instPctEl) instPctEl.textContent = fmtPct(entry.institutions_pct);
+    const insiderPctEl = pctEl('#holderPctInsiders');
+    if (insiderPctEl) insiderPctEl.textContent = insidersPct == null ? '—' : fmtPct(insidersPct);
+    const publicPctEl = pctEl('#holderPctPublic');
+    if (publicPctEl) publicPctEl.textContent = fmtPct(insidersPct == null ? 1 - entry.institutions_pct : 1 - entry.institutions_pct - insidersPct);
     const instTop = topEntry && topEntry.institutions && topEntry.institutions.top;
     if (instTop && instTop.length) table('topInstitutionsTable', ['#', 'Manager', 'Shares', '%'], topInstitutionRows(instTop));
     else emptyTable('topInstitutionsTable', ['#', 'Manager', 'Shares', '%'], topHoldersData ? 'No institutional holders reported for this company in the latest 13F quarter.' : 'Top holder data is still being built — check back soon.');
@@ -813,3 +821,11 @@ document.querySelector('#profitPeriodSwitch').addEventListener('click', event =>
 document.querySelector('#balancePeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !periodData) return; renderBalance(button.dataset.period); });
 document.querySelector('#cashflowPeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !periodData) return; renderCashflow(button.dataset.period); });
 document.querySelector('#ratiosPeriodSwitch').addEventListener('click', event => { const button = event.target.closest('[data-period]'); if (!button || !periodData) return; renderRatios(button.dataset.period); });
+// Shareholding dropdowns: Institutions, Insiders and Public each open
+// their top-5 list like a dropdown; opening one closes the others.
+document.querySelectorAll('.holder-group-head').forEach(button => button.addEventListener('click', () => {
+  const group = button.closest('.holder-group');
+  const willOpen = !group.classList.contains('open');
+  document.querySelectorAll('.holder-group.open').forEach(other => { other.classList.remove('open'); other.querySelector('.holder-group-head').setAttribute('aria-expanded', 'false'); });
+  if (willOpen) { group.classList.add('open'); button.setAttribute('aria-expanded', 'true'); }
+}));
