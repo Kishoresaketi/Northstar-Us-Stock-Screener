@@ -12,10 +12,12 @@ Accenture / Bank of America / Exxon Mobil exact-name stubs, Alphabet
 class split (GOOGL/GOOG), Honeywell multi-CUSIP group (HON), and the
 Skyworks over-100% case (SWKS).
 """
+import http.client
 import os
 import sys
 import unittest
 from datetime import date
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -447,6 +449,66 @@ class TestSharesOutstandingOverrides(unittest.TestCase):
             with self.subTest(symbol=symbol):
                 self.assertEqual(
                     tf.shares_outstanding_asof(symbol, Q2), expected)
+
+
+class TestGetRetries(unittest.TestCase):
+    """EDGAR truncates responses mid-download (IncompleteRead) and drops
+    connections (RemoteDisconnected) — both must be retried, not lost.
+    The Nov 22 top-holders run lost 869 of 8,898 filings to exactly
+    these two errors, including every large manager table."""
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+            self.headers = {}
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _patched(self, urlopen):
+        return (mock.patch("urllib.request.urlopen", side_effect=urlopen),
+                mock.patch.object(tf, "_rate_wait", lambda: None),
+                mock.patch("time.sleep", lambda s: None))
+
+    def test_incomplete_read_retried_then_succeeds(self):
+        calls = {"n": 0}
+
+        def flaky(request, timeout=None):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise http.client.IncompleteRead(b"partial", 100)
+            return self._Resp(b"ok")
+
+        patches = self._patched(flaky)
+        for p in patches:
+            p.start()
+        try:
+            self.assertEqual(tf._get("https://example.com/x"), b"ok")
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertEqual(calls["n"], 3)
+
+    def test_remote_disconnected_retried_then_raised(self):
+        def dead(request, timeout=None):
+            raise http.client.RemoteDisconnected(
+                "Remote end closed connection without response")
+
+        patches = self._patched(dead)
+        for p in patches:
+            p.start()
+        try:
+            with self.assertRaises(http.client.RemoteDisconnected):
+                tf._get("https://example.com/x")
+        finally:
+            for p in patches:
+                p.stop()
 
 
 if __name__ == "__main__":

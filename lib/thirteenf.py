@@ -42,6 +42,7 @@ uses the same User-Agent as lib/edgar.py.
 """
 
 import gzip
+import http.client
 import json
 import os
 import re
@@ -103,7 +104,16 @@ def _rate_wait():
 
 
 def _get(url, timeout=30, tries=3):
-    """GET with the EDGAR user agent, gzip, retries on 429/5xx."""
+    """GET with the EDGAR user agent, gzip, retries on 429/5xx.
+
+    Transport failures are retried too: EDGAR truncates responses
+    mid-download (http.client.IncompleteRead — the Nov 22 top-holders
+    run lost 869 of 8,898 filings to it, including every large manager
+    table: BlackRock, all Vanguard entities, State Street) and drops
+    connections (RemoteDisconnected). Both are http.client errors, not
+    URLError, so they previously escaped unretried and the filing was
+    lost on the first attempt.
+    """
     last = None
     for attempt in range(tries):
         _rate_wait()
@@ -120,7 +130,8 @@ def _get(url, timeout=30, tries=3):
                 time.sleep(2 ** attempt)
                 continue
             raise
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError,
+                http.client.HTTPException, ConnectionError) as exc:
             last = exc
             if attempt < tries - 1:
                 time.sleep(2 ** attempt)
@@ -1425,3 +1436,103 @@ def build_shareholding(tickers, quarter_end=None, totals=None, log=print):
             "mapping_warnings": (selected or {}).get("warnings") or [],
         }
     return out, totals, stats
+
+
+# ---------------------------------------------------------------------------
+# Top holders (per-manager attribution)
+#
+# The aggregate() totals above hold per-CUSIP sums only — the per-manager
+# rows were summed and discarded. The top-holders build re-downloads the
+# information tables and keeps, per filing, the SOLE shares for universe
+# CUSIPs; the shared (DFND/SHRD) part comes from the participant-set
+# groups, which the checkpoint already records per reporting manager.
+#
+# Attribution rule (documented, same de-dup as the audited totals): a
+# shared block counts ONCE, at the largest amount any participant
+# reported for it, and is attributed to ONE participant — the winner
+# below. The winner is the participant who reported the largest amount
+# for the block (the "all" figure: DFND + SHRD for that reporter in
+# that group). Ties are the normal case — every participant in a group
+# reports the same block value — so they break toward the manager who
+# reported the block under DFND (the one who defined the discretion;
+# the SHRD reporters are mirrors), then toward the largest DFND amount,
+# then toward the lowest CIK (deterministic, arbitrary, recorded).
+# SOLE rows are never shared, so they attribute to their reporter in
+# full. The per-manager sums reconcile exactly with the audited totals:
+# sum over managers == the finalized shares_all == shares (the two
+# coincide after de-dup — verified for all 30,368 CUSIPs in Q2 2026).
+# ---------------------------------------------------------------------------
+
+def group_winner(per_reporter):
+    """One winner for a shared block.
+
+    per_reporter: {reporter_cik: (dfnd_shares, all_shares)} for one
+    (cusip, participant-set) group. Returns (winner_cik, amount) where
+    amount is the block counted once, at the largest amount any
+    participant reported. Tie-breaks, in order: largest "all" amount;
+    reporter under DFND (dfnd > 0) over a SHRD-only reporter; largest
+    DFND amount; lowest CIK. Returns (None, 0) when no reporter has
+    shares (an all-zero group counts nothing).
+    """
+    best = None
+    for cik, amounts in per_reporter.items():
+        dfnd, all_shares = amounts[0], amounts[1]
+        if not all_shares:
+            continue
+        # Sort key, best-first: amount desc, DFND reporter first,
+        # DFND amount desc, CIK asc (deterministic).
+        key = (-all_shares, 0 if dfnd else 1, -dfnd, cik)
+        if best is None or key < best[0]:
+            best = (key, cik, all_shares)
+    if best is None:
+        return None, 0
+    return best[1], best[2]
+
+
+def per_manager_holdings(sole_by_manager, groups):
+    """Per-manager holdings by CUSIP from SOLE rows + shared groups.
+
+    sole_by_manager: {manager_cik: {cusip: sole_shares}}.
+    groups: {(cusip, participants_tuple): {reporter_cik: (dfnd, all)}}.
+    Returns {manager_cik: {cusip: shares}} with each shared block
+    counted once and attributed to its group winner (see group_winner).
+    """
+    holdings = {}
+    for cik, per_cusip in sole_by_manager.items():
+        slot = holdings.setdefault(cik, {})
+        for cusip, shares in per_cusip.items():
+            if shares:
+                slot[cusip] = slot.get(cusip, 0) + shares
+    for (cusip, _participants), per_reporter in groups.items():
+        winner, amount = group_winner(per_reporter)
+        if winner is None or not amount:
+            continue
+        slot = holdings.setdefault(winner, {})
+        slot[cusip] = slot.get(cusip, 0) + amount
+    return holdings
+
+
+def rank_top_holders(holdings, cusips, shares_outstanding, top_n=5):
+    """Rank managers holding one ticker's stock.
+
+    holdings: {manager_cik: {cusip: shares}} (see per_manager_holdings).
+    cusips: the ticker's common-stock CUSIP(s) — several for CUSIP_GROUPS
+    tickers (HON), one otherwise. shares_outstanding: the same
+    denominator data/shareholding.json uses for the ticker.
+    Returns {"top": [{cik, shares, pct}], "managers": n, "total": shares}
+    where total is the sum over ALL managers (reconciliation target:
+    it must equal the ticker's institutions_shares in shareholding.json)
+    and top is the top_n managers by shares, pct = shares / shares_out.
+    Managers are ranked by shares desc, CIK asc as a deterministic tie-break.
+    """
+    by_manager = {}
+    for cik, per_cusip in holdings.items():
+        total = sum(per_cusip.get(c, 0) for c in cusips)
+        if total:
+            by_manager[cik] = total
+    ranked = sorted(by_manager.items(), key=lambda kv: (-kv[1], kv[0]))
+    total = sum(by_manager.values())
+    top = [{"cik": cik, "shares": shares,
+            "pct": (shares / shares_outstanding) if shares_outstanding else None}
+           for cik, shares in ranked[:top_n]]
+    return {"top": top, "managers": len(by_manager), "total": total}

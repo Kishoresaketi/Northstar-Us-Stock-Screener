@@ -29,12 +29,30 @@ function fmtDollars(value) { return value == null ? '—' : `$${Number(value).to
 function fmtDays(value) { return value == null ? '—' : Number(value).toFixed(1); }
 
 // Shareholding (13F institutional ownership) lives in one quarterly file,
-// data/shareholding.json, read directly so both the static Pages build and
-// the live Vercel build use it. Insiders % is not in 13F filings and no
-// free source supplies it, so insiders render as "—" and the public
-// figure is the remainder, labelled as including insiders.
+// data/shareholding.json, and the top holders in data/top-holders.json,
+// both read directly so the static Pages build and the live Vercel build
+// use them. Institutions come from SEC Form 13F filings; insiders from
+// each holder's most recent Form 4; public is the aggregate remainder —
+// no named public holders exist in any filing.
+function fmtShares(value) {
+  if (value == null) return '—';
+  if (value >= 1e6) return `${Math.round(value / 1e6).toLocaleString('en-US')}M`;
+  return Number(value).toLocaleString('en-US');
+}
+function shareholdingSummaryRows(instPct, insidersPct) {
+  if (insidersPct == null) return [['Institutions', fmtPct(instPct)], ['Insiders', '—'], ['Public (includes insiders)', fmtPct(1 - instPct)]];
+  return [['Institutions', fmtPct(instPct)], ['Insiders', fmtPct(insidersPct)], ['Public (aggregate)', fmtPct(1 - instPct - insidersPct)]];
+}
+function topInstitutionRows(top) {
+  return (top || []).map((holder, i) => [i + 1, holder.name || '—', fmtShares(holder.shares), fmtPct(holder.pct)]);
+}
+function topInsiderRows(top) {
+  return (top || []).map((holder, i) => [i + 1, holder.name || '—', fmtShares(holder.shares), fmtPct(holder.pct), holder.filing_date || '—']);
+}
 let shareholdingData = null;
 let shareholdingLoaded = false;
+let topHoldersData = null;
+let topHoldersLoaded = false;
 async function loadShareholding(symbol) {
   const note = document.querySelector('#shareholdingNote');
   try {
@@ -47,15 +65,43 @@ async function loadShareholding(symbol) {
     const entry = shareholdingData.entries && shareholdingData.entries[symbol];
     if (!entry || entry.institutions_pct == null) {
       emptyTable('shareholdingTable', ['Holder', 'Share'], 'No institutional holdings reported for this company in the latest 13F quarter.');
+      emptyTable('topInstitutionsTable', ['#', 'Manager', 'Shares', '%'], 'No institutional holders reported for this company in the latest 13F quarter.');
+      emptyTable('topInsidersTable', ['#', 'Insider', 'Shares', '%', 'Latest Form 4'], 'No Form 4 insider holdings reported for this company.');
       return;
     }
-    if (note && shareholdingData.label) note.textContent = `Who holds the shares, from SEC Form 13F filings — ${shareholdingData.label}. ${(entry.filers || 0).toLocaleString('en-US')} managers reported ${fmtPct(entry.institutions_pct)} of shares outstanding. Insiders are not in 13F filings, so the public figure includes them.`;
-    table('shareholdingTable', ['Holder', 'Share'],
-      [['Institutions', fmtPct(entry.institutions_pct)],
-       ['Insiders', '—'],
-       ['Public (includes insiders)', fmtPct(1 - entry.institutions_pct)]]);
+    // Top holders are best-effort: an older deploy may not have the file yet.
+    let topEntry = null;
+    try {
+      if (!topHoldersLoaded) {
+        const topResponse = await fetch('data/top-holders.json', { cache: 'no-store' });
+        if (!topResponse.ok) throw new Error('top holders unavailable');
+        topHoldersData = await topResponse.json();
+        topHoldersLoaded = true;
+      }
+      topEntry = topHoldersData.entries && topHoldersData.entries[symbol];
+    } catch (error) {
+      topEntry = null;
+    }
+    const insiders = topEntry && topEntry.insiders;
+    const insidersPct = insiders && insiders.total_pct;
+    if (note && shareholdingData.label) {
+      let text = topEntry
+        ? `Who holds the shares — institutions from SEC Form 13F filings, ${shareholdingData.label}, and insiders from each holder's most recent Form 4. ${(entry.filers || 0).toLocaleString('en-US')} managers reported ${fmtPct(entry.institutions_pct)} of shares outstanding. A shared-discretion block counts once, attributed to the manager who reported the largest amount; large investment complexes file through several separate entities, so one complex can appear on several rows. Public is the aggregate remainder — no named public holders exist in any filing.`
+        : `Who holds the shares, from SEC Form 13F filings — ${shareholdingData.label}. ${(entry.filers || 0).toLocaleString('en-US')} managers reported ${fmtPct(entry.institutions_pct)} of shares outstanding. Insiders are not in 13F filings, so the public figure includes them.`;
+      if (topEntry && insiders && insiders.overlap) text += ` ${insiders.overlap_note || 'Insider holdings overlap across related holders, so no insider total is shown for this company.'}`;
+      note.textContent = text;
+    }
+    table('shareholdingTable', ['Holder', 'Share'], shareholdingSummaryRows(entry.institutions_pct, insidersPct));
+    const instTop = topEntry && topEntry.institutions && topEntry.institutions.top;
+    if (instTop && instTop.length) table('topInstitutionsTable', ['#', 'Manager', 'Shares', '%'], topInstitutionRows(instTop));
+    else emptyTable('topInstitutionsTable', ['#', 'Manager', 'Shares', '%'], topHoldersData ? 'No institutional holders reported for this company in the latest 13F quarter.' : 'Top holder data is still being built — check back soon.');
+    const insiderTop = insiders && insiders.top;
+    if (insiderTop && insiderTop.length) table('topInsidersTable', ['#', 'Insider', 'Shares', '%', 'Latest Form 4'], topInsiderRows(insiderTop));
+    else emptyTable('topInsidersTable', ['#', 'Insider', 'Shares', '%', 'Latest Form 4'], topHoldersData ? 'No Form 4 insider holdings reported for this company.' : 'Top holder data is still being built — check back soon.');
   } catch (error) {
     emptyTable('shareholdingTable', ['Holder', 'Share'], 'Shareholding data is still being built — check back soon.');
+    emptyTable('topInstitutionsTable', ['#', 'Manager', 'Shares', '%'], 'Shareholding data is still being built — check back soon.');
+    emptyTable('topInsidersTable', ['#', 'Insider', 'Shares', '%', 'Latest Form 4'], 'Shareholding data is still being built — check back soon.');
   }
 }
 // SEC Documents: filing indexes on EDGAR, built from the company's CIK
@@ -611,7 +657,7 @@ function renderFinancialsUnavailable(message) {
   if (notesBox) { notesBox.hidden = true; const notesList = document.querySelector('#dataNotesList'); if (notesList) notesList.innerHTML = ''; }
   const growthGrid = document.querySelector('#growthGrid');
   if (growthGrid) growthGrid.innerHTML = `<article class="insight-card"><h3>Growth</h3><p>${message}</p></article>`;
-  ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable', 'shareholdingTable', 'documentsTable'].forEach(id => {
+  ['comparisonTable', 'quarterlyTable', 'profitTable', 'balanceTable', 'cashflowTable', 'ratiosTable', 'shareholdingTable', 'topInstitutionsTable', 'topInsidersTable', 'documentsTable'].forEach(id => {
     const el = document.querySelector(`#${id}`);
     if (el) el.innerHTML = `<tbody><tr><td>${message}</td></tr></tbody>`;
   });
